@@ -1,26 +1,53 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-geist);
+  --font-serif: var(--font-fraunces);
+  --color-paper: #ffffff;
+  --color-mist: #f4f7f4;
+  --color-ink: #1a2420;
+  --color-forest: #143d32;
+  --color-forest-deep: #0d2b23;
+  --color-leaf: #1f6b4a;
+  --color-sage: #e7f2ea;
+  --color-copper: #1f6b4a;
+  --color-copper-dark: #143d32;
+  --color-stone: #5c675f;
+  --color-line: #e3ebe5;
+  --color-card: #ffffff;
+  --color-moss: #1f6b4a;
+  --color-danger: #9f1239;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+html { scroll-behavior: smooth; }
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans), sans-serif;
+}
+h1, h2, h3, .font-serif { font-family: var(--font-serif), Georgia, serif; font-weight: 520; letter-spacing: -0.02em; }
+:focus-visible { outline: 2px solid #143d32; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes auranova-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee-track {
+  animation: auranova-marquee 32s linear infinite;
+}
+.marquee-track:hover { animation-play-state: paused; }
+.prose-store p { margin: 0.75rem 0; line-height: 1.7; }
+.prose-store h2, .prose-store h3 { margin-top: 1.5rem; }
+.prose-store ul { margin: 0.75rem 0 0.75rem 1.25rem; list-style: disc; }
+.prose-store a { text-decoration: underline; text-underline-offset: 3px; }
+@media print {
+  header, footer, nav, .no-print { display: none !important; }
+  body { background: white; }
 }
