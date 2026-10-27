@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
 import { acceptWebhook } from "@/server/payments/settle";
 import type { ProviderName } from "@/server/payments/adapters";
 

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
 import { csvCell } from "@/lib/csv";
 import { prisma } from "@/server/db";
 import { requirePermission } from "@/server/session";

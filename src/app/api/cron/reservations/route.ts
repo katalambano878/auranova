@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
 import { raiseLowStockAlerts, releaseExpiredReservations } from "@/server/reservations";
 
 export async function POST(request: Request) {

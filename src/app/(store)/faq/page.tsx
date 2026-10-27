@@ -1,6 +1,8 @@
 import { prisma } from "@/server/db";
 import { PageIntro } from "@/components/store/page-intro";
 
+export const dynamic = "force-dynamic";
+
 export const metadata = { title: "FAQ" };
 
 export default async function FaqPage() {
