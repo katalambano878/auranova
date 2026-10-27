@@ -61,7 +61,11 @@ export function ProductEditor({
         </Label>
         <Label>Price (GHS)<Input name="price" required defaultValue={major(product?.price)} /></Label>
         <Label>Sale price (GHS)<Input name="salePrice" defaultValue={major(product?.salePrice)} /></Label>
-        <Label>Stock on hand<Input name="onHand" type="number" defaultValue={product?.onHand ?? 0} /></Label>
+        {product?.id ? (
+          <p className="text-sm text-stone">Stock on hand is {product.onHand}. Change it from Inventory so a sale is not overwritten.</p>
+        ) : (
+          <Label>Stock on hand<Input name="onHand" type="number" min={0} defaultValue={0} /></Label>
+        )}
         <Label>Low-stock threshold<Input name="lowStockThreshold" type="number" defaultValue={product?.lowStockThreshold ?? 5} /></Label>
       </div>
       <Label>Short description<Input name="shortDescription" defaultValue={product?.shortDescription} /></Label>

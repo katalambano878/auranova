@@ -57,7 +57,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
   const path = (await headers()).get("x-auranova-path") || "";
   const rule = rules.find(([prefix]) => path === prefix || path.startsWith(`${prefix}/`));
-  const denied = rule ? !can(session.user.role, rule[1]) : false;
+  const denied = !path.startsWith("/admin") || (rule ? !can(session.user.role, rule[1]) : false);
   const visible = links.filter((link) => link.href === "/admin" || can(session.user.role, link.permission) || (link.href === "/admin/audit-log" && can(session.user.role, "settings.write")));
   return (
     <div className="min-h-screen md:grid md:grid-cols-[220px_1fr]">

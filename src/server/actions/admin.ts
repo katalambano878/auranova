@@ -44,7 +44,6 @@ export async function saveProduct(formData: FormData) {
     brandId,
     price,
     salePrice,
-    onHand: Number(formData.get("onHand") || 0),
     lowStockThreshold: Number(formData.get("lowStockThreshold") || 5),
     status: String(formData.get("status") || "DRAFT") as "DRAFT" | "PUBLISHED" | "ARCHIVED",
     featured: formData.get("featured") === "on",
@@ -68,7 +67,9 @@ export async function saveProduct(formData: FormData) {
       }
       await audit({ actorId: access.session.user.id, action: "product.update", entity: "product", entityId: id, metadata: { price, salePrice } });
     } else {
-      const product = await prisma.product.create({ data });
+      const product = await prisma.product.create({
+        data: { ...data, onHand: Math.max(0, Math.floor(Number(formData.get("onHand") || 0))) },
+      });
       await audit({ actorId: access.session.user.id, action: "product.create", entity: "product", entityId: product.id });
     }
   } catch {

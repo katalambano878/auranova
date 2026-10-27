@@ -269,8 +269,20 @@ export async function placeOrder(raw: unknown) {
     orderNo = created.number;
   } catch (error) {
     if (error instanceof Error && error.message === "STOCK") return { ok: false as const, error: "A product sold out while you were checking out." };
-    const raced = await prisma.order.findUnique({ where: { idempotencyKey: parsed.data.idempotencyKey } });
-    if (raced) return { ok: true as const, orderNumber: raced.number, attemptReference: reference, checkoutUrl: null, paymentStatus: raced.paymentStatus };
+    const raced = await prisma.order.findUnique({
+      where: { idempotencyKey: parsed.data.idempotencyKey },
+      include: { attempts: { orderBy: { createdAt: "desc" }, take: 1 } },
+    });
+    if (raced) {
+      const attempt = raced.attempts[0];
+      return {
+        ok: true as const,
+        orderNumber: raced.number,
+        attemptReference: attempt?.reference ?? "",
+        checkoutUrl: attempt?.checkoutUrl ?? null,
+        paymentStatus: raced.paymentStatus,
+      };
+    }
     throw error;
   }
 

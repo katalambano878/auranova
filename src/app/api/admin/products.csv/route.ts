@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { csvCell } from "@/lib/csv";
 import { prisma } from "@/server/db";
 import { requirePermission } from "@/server/session";
 
@@ -13,15 +14,15 @@ export async function GET() {
   const header = "sku,name,slug,price,salePrice,category,stock,status,shortDescription";
   const lines = products.map((product) => [
     product.sku,
-    csv(product.name),
+    product.name,
     product.slug,
     (product.price / 100).toFixed(2),
     product.salePrice == null ? "" : (product.salePrice / 100).toFixed(2),
     product.category.slug,
     String(product.onHand),
     product.status,
-    csv(product.shortDescription),
-  ].join(","));
+    product.shortDescription,
+  ].map(csvCell).join(","));
   return new NextResponse([header, ...lines].join("\n"), {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
@@ -30,7 +31,3 @@ export async function GET() {
   });
 }
 
-function csv(value: string) {
-  if (/[",\n]/.test(value)) return `"${value.replaceAll('"', '""')}"`;
-  return value;
-}

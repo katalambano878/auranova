@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { csvCell } from "./csv";
 import { evaluateCoupon } from "./coupons";
 import { majorToMinor, parseMoney } from "./money";
 import { decidePayment } from "./payments/decision";
@@ -8,6 +9,13 @@ import { quoteShipping } from "./shipping";
 import { startOfDayInTimeZone } from "./time";
 
 const line = { productId: "p1", categoryId: "c1", quantity: 2, unitPrice: 5000 };
+
+describe("csv", () => {
+  it("quotes commas and neutralises formulas", () => {
+    expect(csvCell("GH₵1,240.00")).toBe("\"GH₵1,240.00\"");
+    expect(csvCell("=cmd")).toBe("'=cmd");
+  });
+});
 
 describe("money", () => {
   it("parses cedis into pesewas", () => {

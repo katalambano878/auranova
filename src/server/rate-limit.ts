@@ -1,17 +1,16 @@
 import { prisma } from "./db";
 
 export async function rateLimit(key: string, limit: number, windowMs: number) {
-  const now = new Date();
-  const bucket = await prisma.rateLimitBucket.findUnique({ where: { key } });
-  if (!bucket || bucket.resetAt <= now) {
-    await prisma.rateLimitBucket.upsert({
-      where: { key },
-      create: { key, count: 1, resetAt: new Date(now.getTime() + windowMs) },
-      update: { count: 1, resetAt: new Date(now.getTime() + windowMs) },
-    });
-    return { ok: true as const };
-  }
-  if (bucket.count >= limit) return { ok: false as const };
-  await prisma.rateLimitBucket.update({ where: { key }, data: { count: { increment: 1 } } });
-  return { ok: true as const };
+  const resetAt = new Date(Date.now() + windowMs);
+  const rows = await prisma.$queryRaw<{ count: number }[]>`
+    INSERT INTO "RateLimitBucket" ("key", "count", "resetAt")
+    VALUES (${key}, 1, ${resetAt})
+    ON CONFLICT ("key") DO UPDATE
+    SET
+      "count" = CASE WHEN "RateLimitBucket"."resetAt" <= NOW() THEN 1 ELSE "RateLimitBucket"."count" + 1 END,
+      "resetAt" = CASE WHEN "RateLimitBucket"."resetAt" <= NOW() THEN EXCLUDED."resetAt" ELSE "RateLimitBucket"."resetAt" END
+    RETURNING "count"
+  `;
+  const count = Number(rows[0]?.count ?? 1);
+  return count <= limit ? { ok: true as const } : { ok: false as const };
 }

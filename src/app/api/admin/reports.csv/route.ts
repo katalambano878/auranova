@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { csvCell } from "@/lib/csv";
 import { formatMoney } from "@/lib/money";
 import { prisma } from "@/server/db";
 import { requirePermission } from "@/server/session";
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
       formatMoney(Math.max(order.total - refunded, 0), order.currency),
       order.currency,
       order.isDemo ? "yes" : "no",
-    ].join(",");
+    ].map(csvCell).join(",");
   });
   return new NextResponse([header, ...lines].join("\n"), {
     headers: {
