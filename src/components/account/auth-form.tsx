@@ -33,7 +33,11 @@ export function AuthForm({ mode }: { mode: "login" | "register" | "forgot" }) {
       const result = mode === "login" ? await signInAction(email, password) : await signUpAction(name, email, password);
       setPending(false);
       if (!result.ok) return setError(result.error);
-      await syncCart();
+      try {
+        await syncCart();
+      } catch {
+        // The session is already saved. A cart problem must not leave the person on the sign-in form.
+      }
       router.push(destination);
       router.refresh();
     }}>
