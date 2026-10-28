@@ -1,18 +1,19 @@
 import { staffRoles } from "@/server/permissions";
 import { createStaff } from "@/server/actions/admin";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { AdminForm } from "@/components/admin/form";
 import { Input, Label } from "@/components/ui/fields";
 
 export const dynamic = "force-dynamic";
 
 export default async function StaffPage() {
-  const staff = await prisma.user.findMany({ where: { role: { not: "customer" } }, orderBy: { createdAt: "asc" } });
+  const { data: staff, error } = await supabaseAdmin().from("User").select("*").neq("role", "customer").order("createdAt");
+  throwIf(error);
   return (
     <main className="max-w-xl">
       <h1 className="font-serif text-4xl">Staff</h1>
       <ul className="mt-6 text-sm">
-        {staff.map((person) => <li key={person.id} className="border-b border-line py-2">{person.name} · {person.email} · {person.role.replaceAll("_", " ")}{person.twoFactorEnabled ? " · authenticator on" : ""}</li>)}
+        {(staff || []).map((person) => <li key={person.id} className="border-b border-line py-2">{person.name} · {person.email} · {person.role.replaceAll("_", " ")}{person.twoFactorEnabled ? " · authenticator on" : ""}</li>)}
       </ul>
       <div className="mt-8">
         <h2 className="font-serif text-2xl">Add a staff account</h2>

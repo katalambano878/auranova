@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatMoney } from "@/lib/money";
 import { verifyAttempt } from "@/server/payments/settle";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { getSettings } from "@/server/settings";
 import { RetryPayment } from "@/components/store/retry-payment";
 import { PageIntro } from "@/components/store/page-intro";
@@ -13,8 +13,13 @@ export default async function ConfirmationPage({ searchParams }: { searchParams:
   const { attempt } = await searchParams;
   if (!attempt) notFound();
   const result = await verifyAttempt(attempt);
-  const record = await prisma.paymentAttempt.findUnique({ where: { reference: attempt }, include: { order: { include: { items: true } } } });
-  if (!record) notFound();
+  const { data: record, error } = await supabaseAdmin()
+    .from("PaymentAttempt")
+    .select("*, order:Order(*, items:OrderItem(*))")
+    .eq("reference", attempt)
+    .maybeSingle();
+  throwIf(error);
+  if (!record?.order) notFound();
   const settings = await getSettings();
   const paid = result.ok && result.status === "successful";
   const failed = result.ok && result.status === "failed";
@@ -41,7 +46,7 @@ export default async function ConfirmationPage({ searchParams }: { searchParams:
         <div className="flex justify-between"><dt>Deliver to</dt><dd>{address.line1}, {address.city}, {address.region}</dd></div>
       </dl>
       <ul className="mt-6 space-y-2 text-sm">
-        {record.order.items.map((item) => <li key={item.id}>{item.quantity} × {item.name}{item.variantName ? ` (${item.variantName})` : ""}</li>)}
+        {record.order.items.map((item: any) => <li key={item.id}>{item.quantity} × {item.name}{item.variantName ? ` (${item.variantName})` : ""}</li>)}
       </ul>
       {!paid && record.provider !== "pay_on_delivery" ? <RetryPayment reference={attempt} /> : null}
       <p className="mt-8 text-sm">Questions: {settings.supportEmail || settings.supportPhone || "see the contact page"}.</p>

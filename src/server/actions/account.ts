@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { prisma } from "../db";
+import { nid, supabaseAdmin, throwIf } from "../db";
 import { getSession } from "../session";
 import { rateLimit } from "../rate-limit";
 import { normalizeGhanaPhone, isDigitalAddress, GHANA_REGIONS } from "@/lib/ghana";
@@ -9,13 +9,16 @@ import { normalizeGhanaPhone, isDigitalAddress, GHANA_REGIONS } from "@/lib/ghan
 export async function trackOrder(orderNumber: string, email: string) {
   const limited = await rateLimit(`track:${email.toLowerCase()}`, 8, 10 * 60 * 1000);
   if (!limited.ok) return { ok: false as const, error: "Too many lookups." };
-  const order = await prisma.order.findUnique({
-    where: { number: orderNumber.trim() },
-    include: { items: true, shipment: true },
-  });
+  const { data: order, error } = await supabaseAdmin()
+    .from("Order")
+    .select("number, email, paymentStatus, fulfilmentStatus, total, currency, items:OrderItem(name, quantity, variantName), shipment:Shipment(trackingRef)")
+    .eq("number", orderNumber.trim())
+    .maybeSingle();
+  throwIf(error);
   if (!order || order.email !== email.trim().toLowerCase()) {
     return { ok: false as const, error: "No order matched that number and email." };
   }
+  const shipment = Array.isArray(order.shipment) ? order.shipment[0] : order.shipment;
   return {
     ok: true as const,
     order: {
@@ -24,8 +27,12 @@ export async function trackOrder(orderNumber: string, email: string) {
       fulfilmentStatus: order.fulfilmentStatus,
       total: order.total,
       currency: order.currency,
-      trackingRef: order.shipment?.trackingRef || null,
-      items: order.items.map((item) => ({ name: item.name, quantity: item.quantity, variantName: item.variantName })),
+      trackingRef: shipment?.trackingRef || null,
+      items: (order.items || []).map((item: { name: string; quantity: number; variantName: string | null }) => ({
+        name: item.name,
+        quantity: item.quantity,
+        variantName: item.variantName,
+      })),
     },
   };
 }
@@ -53,14 +60,25 @@ export async function saveAddress(input: unknown, id?: string) {
   const phone = normalizeGhanaPhone(parsed.data.phone);
   if (!phone) return { ok: false as const, error: "Enter a valid Ghana phone number." };
   if (parsed.data.digitalAddress && !isDigitalAddress(parsed.data.digitalAddress)) return { ok: false as const, error: "Check the GhanaPost address." };
-  if (parsed.data.isDefault) await prisma.address.updateMany({ where: { userId: session.user.id }, data: { isDefault: false } });
-  const data = { ...parsed.data, phone, userId: session.user.id, landmark: parsed.data.landmark || null, digitalAddress: parsed.data.digitalAddress || null, postalCode: parsed.data.postalCode || null };
+  const db = supabaseAdmin();
+  if (parsed.data.isDefault) {
+    await db.from("Address").update({ isDefault: false }).eq("userId", session.user.id);
+  }
+  const data = {
+    ...parsed.data,
+    phone,
+    userId: session.user.id,
+    landmark: parsed.data.landmark || null,
+    digitalAddress: parsed.data.digitalAddress || null,
+    postalCode: parsed.data.postalCode || null,
+  };
   if (id) {
-    const owned = await prisma.address.findFirst({ where: { id, userId: session.user.id } });
+    const { data: owned, error } = await db.from("Address").select("id").eq("id", id).eq("userId", session.user.id).maybeSingle();
+    throwIf(error);
     if (!owned) return { ok: false as const, error: "Address not found." };
-    await prisma.address.update({ where: { id }, data });
+    await db.from("Address").update(data).eq("id", id);
   } else {
-    await prisma.address.create({ data });
+    await db.from("Address").insert({ id: nid(), ...data });
   }
   return { ok: true as const };
 }
@@ -68,13 +86,13 @@ export async function saveAddress(input: unknown, id?: string) {
 export async function deleteAddress(id: string) {
   const session = await getSession();
   if (!session) return { ok: false as const, error: "Sign in required." };
-  await prisma.address.deleteMany({ where: { id, userId: session.user.id } });
+  await supabaseAdmin().from("Address").delete().eq("id", id).eq("userId", session.user.id);
   return { ok: true as const };
 }
 
 export async function requestData(type: "EXPORT" | "DELETION") {
   const session = await getSession();
   if (!session) return { ok: false as const, error: "Sign in required." };
-  await prisma.dataRequest.create({ data: { userId: session.user.id, type } });
+  await supabaseAdmin().from("DataRequest").insert({ id: nid(), userId: session.user.id, type });
   return { ok: true as const, message: type === "EXPORT" ? "Export requested. Staff will prepare it." : "Deletion requested. Orders stay for accounting; personal fields can be anonymised after review." };
 }

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-
-export const dynamic = "force-dynamic";
 import { csvCell } from "@/lib/csv";
 import { formatMoney } from "@/lib/money";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { requirePermission } from "@/server/session";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const access = await requirePermission("reports.read");
@@ -12,23 +12,21 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
-  const orders = await prisma.order.findMany({
-    where: {
-      paymentStatus: { in: ["PAID", "PARTIALLY_REFUNDED"] },
-      paidAt: {
-        gte: from ? new Date(from) : undefined,
-        lt: to ? new Date(to) : undefined,
-      },
-    },
-    include: { refunds: true },
-    orderBy: { paidAt: "asc" },
-  });
+  let query = supabaseAdmin()
+    .from("Order")
+    .select("number, paidAt, paymentStatus, fulfilmentStatus, total, currency, isDemo, refunds:Refund(amount, status)")
+    .in("paymentStatus", ["PAID", "PARTIALLY_REFUNDED"])
+    .order("paidAt");
+  if (from) query = query.gte("paidAt", new Date(from).toISOString());
+  if (to) query = query.lt("paidAt", new Date(to).toISOString());
+  const { data: orders, error } = await query;
+  throwIf(error);
   const header = "number,paidAt,paymentStatus,fulfilmentStatus,total,refunded,net,currency,demo";
-  const lines = orders.map((order) => {
-    const refunded = order.refunds.filter((refund) => refund.status === "REFUNDED").reduce((sum, refund) => sum + refund.amount, 0);
+  const lines = (orders || []).map((order) => {
+    const refunded = (order.refunds || []).filter((refund) => refund.status === "REFUNDED").reduce((sum, refund) => sum + refund.amount, 0);
     return [
       order.number,
-      order.paidAt?.toISOString() || "",
+      order.paidAt ? new Date(order.paidAt).toISOString() : "",
       order.paymentStatus,
       order.fulfilmentStatus,
       formatMoney(order.total, order.currency),

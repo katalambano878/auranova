@@ -1,56 +1,63 @@
 import { cookies } from "next/headers";
-import { prisma } from "./db";
+import { nid, supabaseAdmin, throwIf } from "./db";
 import { getSession } from "./session";
-import { availableUnits, priceWithSettings, productInclude } from "./catalog";
+import { availableUnits, priceWithSettings, productEmbed } from "./catalog";
 import { getSettings } from "./settings";
 
 const CART_COOKIE = "auranova_cart";
+const cartSelect = `*, items:CartItem(*, product:Product(${productEmbed}), variant:ProductVariant(*))`;
 
 export async function readCart() {
   const jar = await cookies();
   const token = jar.get(CART_COOKIE)?.value;
   const session = await getSession();
+  const db = supabaseAdmin();
   if (session) {
-    const cart = await prisma.cart.findUnique({
-      where: { userId: session.user.id },
-      include: { items: { include: { product: { include: productInclude }, variant: true } } },
-    });
-    if (cart) return cart;
+    const { data, error } = await db.from("Cart").select(cartSelect).eq("userId", session.user.id).maybeSingle();
+    throwIf(error);
+    if (data) return data;
   }
   if (!token) return null;
-  return prisma.cart.findUnique({
-    where: { token },
-    include: { items: { include: { product: { include: productInclude }, variant: true } } },
-  });
+  const { data, error } = await db.from("Cart").select(cartSelect).eq("token", token).maybeSingle();
+  throwIf(error);
+  return data;
 }
 
 export async function ensureCart() {
   const session = await getSession();
   const jar = await cookies();
   const token = jar.get(CART_COOKIE)?.value;
+  const db = supabaseAdmin();
   if (session) {
-    const existing = await prisma.cart.findUnique({ where: { userId: session.user.id } });
+    const { data: existing, error: existingError } = await db.from("Cart").select("*").eq("userId", session.user.id).maybeSingle();
+    throwIf(existingError);
     if (existing) {
       if (token) await mergeTokenIntoCart(token, existing.id, session.user.id);
       return existing;
     }
     if (token) {
-      const guest = await prisma.cart.findUnique({ where: { token } });
+      const { data: guest, error: guestError } = await db.from("Cart").select("*").eq("token", token).maybeSingle();
+      throwIf(guestError);
       if (guest && !guest.userId) {
-        return prisma.cart.update({ where: { id: guest.id }, data: { userId: session.user.id } });
+        const updated = await db.from("Cart").update({ userId: session.user.id }).eq("id", guest.id).select().single();
+        throwIf(updated.error);
+        return updated.data;
       }
     }
-    const created = await prisma.cart.create({ data: { userId: session.user.id, token: crypto.randomUUID() } });
-    jar.set(CART_COOKIE, created.token, cookieOptions());
-    return created;
+    const created = await db.from("Cart").insert({ id: nid(), userId: session.user.id, token: crypto.randomUUID() }).select().single();
+    throwIf(created.error);
+    jar.set(CART_COOKIE, created.data.token, cookieOptions());
+    return created.data;
   }
   if (token) {
-    const guest = await prisma.cart.findUnique({ where: { token } });
+    const { data: guest, error: guestError } = await db.from("Cart").select("*").eq("token", token).maybeSingle();
+    throwIf(guestError);
     if (guest) return guest;
   }
-  const created = await prisma.cart.create({ data: { token: crypto.randomUUID() } });
-  jar.set(CART_COOKIE, created.token, cookieOptions());
-  return created;
+  const created = await db.from("Cart").insert({ id: nid(), token: crypto.randomUUID() }).select().single();
+  throwIf(created.error);
+  jar.set(CART_COOKIE, created.data.token, cookieOptions());
+  return created.data;
 }
 
 function cookieOptions() {
@@ -64,29 +71,40 @@ function cookieOptions() {
 }
 
 async function mergeTokenIntoCart(token: string, cartId: string, userId: string) {
-  const guest = await prisma.cart.findUnique({ where: { token }, include: { items: true } });
+  const db = supabaseAdmin();
+  const { data: guest, error: guestError } = await db.from("Cart").select("*, items:CartItem(*)").eq("token", token).maybeSingle();
+  throwIf(guestError);
   if (!guest || guest.id === cartId || guest.userId) return;
-  for (const item of guest.items) {
-    const match = await prisma.cartItem.findFirst({
-      where: { cartId, productId: item.productId, variantId: item.variantId },
-    });
+  for (const item of guest.items || []) {
+    let matchQuery = db.from("CartItem").select("id, quantity").eq("cartId", cartId).eq("productId", item.productId);
+    matchQuery = item.variantId ? matchQuery.eq("variantId", item.variantId) : matchQuery.is("variantId", null);
+    const { data: match, error: matchError } = await matchQuery.maybeSingle();
+    throwIf(matchError);
     if (match) {
-      await prisma.cartItem.update({ where: { id: match.id }, data: { quantity: match.quantity + item.quantity } });
+      const updated = await db.from("CartItem").update({ quantity: match.quantity + item.quantity }).eq("id", match.id);
+      throwIf(updated.error);
     } else {
-      await prisma.cartItem.create({
-        data: { cartId, productId: item.productId, variantId: item.variantId, quantity: item.quantity },
+      const inserted = await db.from("CartItem").insert({
+        id: nid(),
+        cartId,
+        productId: item.productId,
+        variantId: item.variantId,
+        quantity: item.quantity,
       });
+      throwIf(inserted.error);
     }
   }
-  await prisma.cart.delete({ where: { id: guest.id } });
-  await prisma.cart.update({ where: { id: cartId }, data: { userId } });
+  const deleted = await db.from("Cart").delete().eq("id", guest.id);
+  throwIf(deleted.error);
+  const linked = await db.from("Cart").update({ userId }).eq("id", cartId);
+  throwIf(linked.error);
 }
 
 export async function cartView() {
   const cart = await readCart();
   const settings = await getSettings();
-  if (!cart) return { items: [], count: 0, subtotal: 0, problems: [] as string[] };
-  const items = cart.items.map((item) => {
+  if (!cart || !cart.items?.length) return { items: [], count: 0, subtotal: 0, problems: [] as string[] };
+  const items = cart.items.map((item: (typeof cart.items)[number]) => {
     const base = {
       ...item,
       unitPrice: 0,
@@ -99,7 +117,7 @@ export async function cartView() {
     if (item.product.status !== "PUBLISHED" || item.product.deletedAt) {
       return { ...base, problem: "This product is no longer available." };
     }
-    if (item.product.variants.length && !item.variant) {
+    if (item.product.variants?.length && !item.variant) {
       return { ...base, problem: "Choose a variant again." };
     }
     const priced = priceWithSettings(settings, item.product, item.variant);
@@ -118,8 +136,8 @@ export async function cartView() {
   });
   return {
     items,
-    count: items.reduce((sum, item) => sum + item.quantity, 0),
-    subtotal: items.reduce((sum, item) => sum + (item.problem ? 0 : item.lineTotal), 0),
-    problems: items.flatMap((item) => (item.problem ? [item.problem] : [])),
+    count: items.reduce((sum: number, item: any) => sum + item.quantity, 0),
+    subtotal: items.reduce((sum: number, item: any) => sum + (item.problem ? 0 : item.lineTotal), 0),
+    problems: items.flatMap((item: any) => (item.problem ? [item.problem] : [])),
   };
 }

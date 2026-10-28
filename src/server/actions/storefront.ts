@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { prisma } from "../db";
+import { nid, supabaseAdmin, throwIf } from "../db";
 import { ensureCart } from "../cart";
 import { availableUnits, priceWithSettings } from "../catalog";
 import { getSettings } from "../settings";
@@ -15,35 +15,55 @@ export async function addToCart(productId: string, variantId: string | null, qua
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
     return { ok: false as const, error: "Choose a quantity between 1 and 20." };
   }
-  const product = await prisma.product.findFirst({
-    where: { id: productId, status: "PUBLISHED", deletedAt: null },
-    include: { variants: true },
-  });
+  const db = supabaseAdmin();
+  const { data: product, error } = await db
+    .from("Product")
+    .select("*, variants:ProductVariant(*)")
+    .eq("id", productId)
+    .eq("status", "PUBLISHED")
+    .is("deletedAt", null)
+    .maybeSingle();
+  throwIf(error);
   if (!product) return { ok: false as const, error: "That product is not available." };
-  const variant = variantId ? product.variants.find((item) => item.id === variantId) ?? null : null;
-  if (product.variants.length && !variant) return { ok: false as const, error: "Choose an available option." };
+  const variant = variantId ? (product.variants || []).find((item: { id: string }) => item.id === variantId) ?? null : null;
+  if (product.variants?.length && !variant) return { ok: false as const, error: "Choose an available option." };
   const settings = await getSettings();
   const available = variant
     ? availableUnits(product.trackInventory, variant.onHand, variant.reserved)
     : availableUnits(product.trackInventory, product.onHand, product.reserved);
   const cart = await ensureCart();
-  const existing = await prisma.cartItem.findFirst({ where: { cartId: cart.id, productId, variantId } });
+  let matchQuery = db.from("CartItem").select("id, quantity").eq("cartId", cart.id).eq("productId", productId);
+  matchQuery = variantId ? matchQuery.eq("variantId", variantId) : matchQuery.is("variantId", null);
+  const { data: existing, error: existingError } = await matchQuery.maybeSingle();
+  throwIf(existingError);
   const nextQuantity = (existing?.quantity ?? 0) + quantity;
   if (product.trackInventory && nextQuantity > available) {
     return { ok: false as const, error: available > 0 ? `Only ${available} available.` : "Out of stock." };
   }
-  if (existing) await prisma.cartItem.update({ where: { id: existing.id }, data: { quantity: nextQuantity } });
-  else await prisma.cartItem.create({ data: { cartId: cart.id, productId, variantId, quantity } });
+  if (existing) {
+    const updated = await db.from("CartItem").update({ quantity: nextQuantity }).eq("id", existing.id);
+    throwIf(updated.error);
+  } else {
+    const inserted = await db.from("CartItem").insert({ id: nid(), cartId: cart.id, productId, variantId, quantity });
+    throwIf(inserted.error);
+  }
   revalidatePath("/", "layout");
   return { ok: true as const, price: priceWithSettings(settings, product, variant).current };
 }
 
 export async function updateCartItem(itemId: string, quantity: number) {
   const cart = await ensureCart();
-  const item = await prisma.cartItem.findFirst({ where: { id: itemId, cartId: cart.id }, include: { product: true, variant: true } });
+  const db = supabaseAdmin();
+  const { data: item, error } = await db
+    .from("CartItem")
+    .select("*, product:Product(*), variant:ProductVariant(*)")
+    .eq("id", itemId)
+    .eq("cartId", cart.id)
+    .maybeSingle();
+  throwIf(error);
   if (!item) return { ok: false as const, error: "Item not found." };
   if (quantity <= 0) {
-    await prisma.cartItem.delete({ where: { id: item.id } });
+    await db.from("CartItem").delete().eq("id", item.id);
     revalidatePath("/", "layout");
     return { ok: true as const };
   }
@@ -51,14 +71,14 @@ export async function updateCartItem(itemId: string, quantity: number) {
     ? availableUnits(item.product.trackInventory, item.variant.onHand, item.variant.reserved)
     : availableUnits(item.product.trackInventory, item.product.onHand, item.product.reserved);
   if (item.product.trackInventory && quantity > available) return { ok: false as const, error: `Only ${available} available.` };
-  await prisma.cartItem.update({ where: { id: item.id }, data: { quantity } });
+  await db.from("CartItem").update({ quantity }).eq("id", item.id);
   revalidatePath("/", "layout");
   return { ok: true as const };
 }
 
 export async function clearCart() {
   const cart = await ensureCart();
-  await prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
+  await supabaseAdmin().from("CartItem").delete().eq("cartId", cart.id);
   revalidatePath("/", "layout");
   return { ok: true as const };
 }
@@ -70,7 +90,8 @@ export async function setCoupon(code: string) {
     jar.delete("auranova_coupon");
     return { ok: true as const };
   }
-  const coupon = await prisma.coupon.findUnique({ where: { code: clean } });
+  const { data: coupon, error } = await supabaseAdmin().from("Coupon").select("active").eq("code", clean).maybeSingle();
+  throwIf(error);
   if (!coupon || !coupon.active) return { ok: false as const, error: "That coupon is not active." };
   jar.set("auranova_coupon", clean, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/" });
   return { ok: true as const };
@@ -81,11 +102,7 @@ export async function subscribeNewsletter(email: string) {
   if (!parsed.success) return { ok: false as const, error: "Enter a valid email address." };
   const limited = await rateLimit(`newsletter:${parsed.data}`, 5, 60 * 60 * 1000);
   if (!limited.ok) return { ok: false as const, error: "Too many attempts. Try again later." };
-  await prisma.newsletterSubscriber.upsert({
-    where: { email: parsed.data },
-    update: {},
-    create: { email: parsed.data, status: "confirmed" },
-  });
+  await supabaseAdmin().from("NewsletterSubscriber").upsert({ id: nid(), email: parsed.data, status: "confirmed" }, { onConflict: "email" });
   return { ok: true as const, message: "You're on the list." };
 }
 
@@ -101,9 +118,14 @@ export async function sendContact(input: { name: string; email: string; phone?: 
   if (parsed.data.phone && !normalizeGhanaPhone(parsed.data.phone)) return { ok: false as const, error: "Enter a valid Ghana phone number or leave it blank." };
   const limited = await rateLimit(`contact:${parsed.data.email}`, 5, 60 * 60 * 1000);
   if (!limited.ok) return { ok: false as const, error: "Too many messages. Try again later." };
-  await prisma.contactMessage.create({ data: parsed.data });
-  await prisma.notification.create({
-    data: { kind: "contact", title: `Message from ${parsed.data.name}`, body: parsed.data.message, emailNote: "Stored for staff. Email is sent only when a provider is configured." },
+  const db = supabaseAdmin();
+  await db.from("ContactMessage").insert({ id: nid(), ...parsed.data });
+  await db.from("Notification").insert({
+    id: nid(),
+    kind: "contact",
+    title: `Message from ${parsed.data.name}`,
+    body: parsed.data.message,
+    emailNote: "Stored for staff. Email is sent only when a provider is configured.",
   });
   return { ok: true as const, message: "Message received. We store it for the store team." };
 }
@@ -118,14 +140,12 @@ export async function mergeWishlist(productIds: string[]) {
   const session = await getSession();
   if (!session) return { ok: false as const };
   const ids = productIds.filter((id) => typeof id === "string").slice(0, 50);
+  const db = supabaseAdmin();
   for (const productId of ids) {
-    const product = await prisma.product.findFirst({ where: { id: productId, status: "PUBLISHED", deletedAt: null } });
+    const { data: product, error } = await db.from("Product").select("id").eq("id", productId).eq("status", "PUBLISHED").is("deletedAt", null).maybeSingle();
+    throwIf(error);
     if (!product) continue;
-    await prisma.wishlistItem.upsert({
-      where: { userId_productId: { userId: session.user.id, productId } },
-      update: {},
-      create: { userId: session.user.id, productId },
-    });
+    await db.from("WishlistItem").upsert({ userId: session.user.id, productId }, { onConflict: "userId,productId" });
   }
   return { ok: true as const };
 }
@@ -133,10 +153,11 @@ export async function mergeWishlist(productIds: string[]) {
 export async function toggleWishlist(productId: string) {
   const session = await getSession();
   if (!session) return { ok: false as const, guest: true };
-  const where = { userId_productId: { userId: session.user.id, productId } };
-  const existing = await prisma.wishlistItem.findUnique({ where });
-  if (existing) await prisma.wishlistItem.delete({ where });
-  else await prisma.wishlistItem.create({ data: { userId: session.user.id, productId } });
+  const db = supabaseAdmin();
+  const { data: existing, error } = await db.from("WishlistItem").select("userId, productId").eq("userId", session.user.id).eq("productId", productId).maybeSingle();
+  throwIf(error);
+  if (existing) await db.from("WishlistItem").delete().eq("userId", session.user.id).eq("productId", productId);
+  else await db.from("WishlistItem").insert({ userId: session.user.id, productId });
   revalidatePath("/wishlist");
   return { ok: true as const, saved: !existing };
 }

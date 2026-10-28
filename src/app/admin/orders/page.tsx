@@ -1,16 +1,15 @@
 import Link from "next/link";
 import { formatMoney } from "@/lib/money";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function OrdersPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const { status } = await searchParams;
-  const orders = await prisma.order.findMany({
-    where: status ? { fulfilmentStatus: status as "PENDING" } : undefined,
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
+  let query = supabaseAdmin().from("Order").select("*").order("createdAt", { ascending: false }).limit(100);
+  if (status) query = query.eq("fulfilmentStatus", status);
+  const { data: orders, error } = await query;
+  throwIf(error);
   return (
     <main>
       <h1 className="font-serif text-4xl">Orders</h1>
@@ -23,7 +22,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
       <table className="mt-6 w-full text-left text-sm">
         <thead><tr className="border-b border-line text-stone"><th className="py-2">Order</th><th>Customer</th><th>Payment</th><th>Fulfilment</th><th>Total</th></tr></thead>
         <tbody>
-          {orders.map((order) => (
+          {(orders || []).map((order) => (
             <tr key={order.id} className="border-b border-line">
               <td className="py-2"><Link className="underline" href={`/admin/orders/${order.id}`}>{order.number}</Link>{order.isDemo ? " · demo" : ""}</td>
               <td>{order.customerName}</td>

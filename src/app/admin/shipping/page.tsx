@@ -1,13 +1,21 @@
 import { formatMoney } from "@/lib/money";
 import { saveShipping } from "@/server/actions/admin";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { AdminForm } from "@/components/admin/form";
 import { Input, Label } from "@/components/ui/fields";
 
 export const dynamic = "force-dynamic";
 
 export default async function ShippingPage() {
-  const zones = await prisma.shippingZone.findMany({ include: { methods: { orderBy: { position: "asc" } } }, orderBy: { name: "asc" } });
+  const { data: zonesRaw, error } = await supabaseAdmin()
+    .from("ShippingZone")
+    .select("*, methods:ShippingMethod(*)")
+    .order("name");
+  throwIf(error);
+  const zones = (zonesRaw || []).map((zone) => ({
+    ...zone,
+    methods: [...(zone.methods || [])].sort((a, b) => a.position - b.position),
+  }));
   return (
     <main className="max-w-3xl">
       <h1 className="font-serif text-4xl">Shipping</h1>
@@ -16,7 +24,7 @@ export default async function ShippingPage() {
           <h2 className="font-serif text-2xl">{zone.name}</h2>
           <p className="text-sm text-stone">{zone.regions.join(", ")}</p>
           <ul className="mt-3 space-y-4">
-            {zone.methods.map((method) => (
+            {zone.methods.map((method: any) => (
               <li key={method.id} className="border border-line p-4">
                 <p className="text-sm text-stone">Current fee {formatMoney(method.fee)}{method.freeThreshold ? ` · free over ${formatMoney(method.freeThreshold)}` : ""}</p>
                 <AdminForm action={saveShipping}>

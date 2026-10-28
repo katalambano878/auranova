@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { listProducts } from "@/server/catalog";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { getSettings } from "@/server/settings";
 import { PageIntro } from "@/components/store/page-intro";
 import { ProductCard } from "@/components/store/product-card";
@@ -10,13 +10,15 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const category = await prisma.category.findUnique({ where: { slug } });
+  const { data: category, error } = await supabaseAdmin().from("Category").select("name, description").eq("slug", slug).maybeSingle();
+  throwIf(error);
   return { title: category?.name || "Category", description: category?.description };
 }
 
 export default async function CategoryPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const category = await prisma.category.findFirst({ where: { slug, deletedAt: null } });
+  const { data: category, error } = await supabaseAdmin().from("Category").select("*").eq("slug", slug).is("deletedAt", null).maybeSingle();
+  throwIf(error);
   if (!category) notFound();
   const [result, settings] = await Promise.all([listProducts({ category: slug }), getSettings()]);
   return (

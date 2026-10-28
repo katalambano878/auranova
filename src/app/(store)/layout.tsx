@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { cartView } from "@/server/cart";
 import { enabledPaymentMethods } from "@/server/checkout";
 import { getSettings } from "@/server/settings";
@@ -17,7 +17,10 @@ export default async function StoreLayout({ children }: { children: React.ReactN
     cartView(),
     getSession(),
     enabledPaymentMethods(),
-    prisma.category.findMany({ where: { deletedAt: null }, orderBy: { position: "asc" }, take: 6 }),
+    supabaseAdmin().from("Category").select("*").is("deletedAt", null).order("position").limit(6).then((result) => {
+      throwIf(result.error);
+      return result.data || [];
+    }),
   ]);
   if (settings.maintenanceMode && !isStaffRole(session?.user.role || "")) {
     return (

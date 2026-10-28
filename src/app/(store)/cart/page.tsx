@@ -25,7 +25,7 @@ export default async function CartPage() {
       <PageIntro eyebrow="Checkout" title="Bag" />
       {coupon ? <p className="mt-2 text-sm text-stone">Coupon {coupon} will be checked at checkout.</p> : null}
       <div className="mt-8">
-        <CartEditor currency={settings.currency} items={cart.items.map((item) => ({
+        <CartEditor currency={settings.currency} items={cart.items.map((item: any) => ({
           id: item.id,
           name: item.product.name,
           variant: item.variant?.label ?? null,

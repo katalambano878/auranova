@@ -1,12 +1,13 @@
 import { uploadMedia } from "@/server/actions/admin";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { AdminForm } from "@/components/admin/form";
 import { Input, Label } from "@/components/ui/fields";
 
 export const dynamic = "force-dynamic";
 
 export default async function MediaPage() {
-  const assets = await prisma.mediaAsset.findMany({ orderBy: { createdAt: "desc" }, take: 60 });
+  const { data: assets, error } = await supabaseAdmin().from("MediaAsset").select("*").order("createdAt", { ascending: false }).limit(60);
+  throwIf(error);
   return (
     <main>
       <h1 className="font-serif text-4xl">Media</h1>
@@ -18,7 +19,7 @@ export default async function MediaPage() {
         </AdminForm>
       </div>
       <ul className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-4">
-        {assets.map((asset) => (
+        {(assets || []).map((asset) => (
           <li key={asset.id} className="border border-line bg-card p-2">
             <img src={asset.url} alt={asset.alt} className="aspect-square w-full object-cover" />
             <p className="mt-2 truncate text-xs text-stone">{asset.alt || asset.url}</p>

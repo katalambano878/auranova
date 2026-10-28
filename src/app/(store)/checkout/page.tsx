@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { CheckoutForm } from "@/components/store/checkout-form";
 import { PageIntro } from "@/components/store/page-intro";
 import { getSession } from "@/server/session";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +10,15 @@ export default async function CheckoutPage() {
   const session = await getSession();
   const jar = await cookies();
   const addresses = session
-    ? await prisma.address.findMany({ where: { userId: session.user.id }, orderBy: { isDefault: "desc" } })
+    ? await supabaseAdmin()
+        .from("Address")
+        .select("*")
+        .eq("userId", session.user.id)
+        .order("isDefault", { ascending: false })
+        .then((result) => {
+          throwIf(result.error);
+          return result.data || [];
+        })
     : [];
   return (
     <main className="mx-auto max-w-7xl px-4 py-16">

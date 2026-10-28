@@ -1,19 +1,29 @@
 import { saveCoupon } from "@/server/actions/admin";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { AdminForm } from "@/components/admin/form";
 import { Input, Label } from "@/components/ui/fields";
 
 export const dynamic = "force-dynamic";
 
 export default async function CouponsPage() {
-  const coupons = await prisma.coupon.findMany({ include: { _count: { select: { redemptions: true } } }, orderBy: { createdAt: "desc" } });
+  const db = supabaseAdmin();
+  const { data: coupons, error } = await db.from("Coupon").select("*").order("createdAt", { ascending: false });
+  throwIf(error);
+  const usage = await Promise.all(
+    (coupons || []).map(async (coupon) => {
+      const { count, error: countError } = await db.from("CouponRedemption").select("id", { count: "exact", head: true }).eq("couponId", coupon.id);
+      throwIf(countError);
+      return { id: coupon.id, redemptions: count ?? 0 };
+    }),
+  );
+  const usageById = Object.fromEntries(usage.map((row) => [row.id, row.redemptions]));
   return (
     <main className="max-w-3xl">
       <h1 className="font-serif text-4xl">Coupons</h1>
       <ul className="mt-6 text-sm">
-        {coupons.map((coupon) => (
+        {(coupons || []).map((coupon) => (
           <li key={coupon.id} className="border-b border-line py-2">
-            {coupon.code} · {coupon.type.toLowerCase().replaceAll("_", " ")} · {coupon.amount} · {coupon._count.redemptions} used · {coupon.active ? "active" : "off"}
+            {coupon.code} · {coupon.type.toLowerCase().replaceAll("_", " ")} · {coupon.amount} · {usageById[coupon.id] ?? 0} used · {coupon.active ? "active" : "off"}
           </li>
         ))}
       </ul>

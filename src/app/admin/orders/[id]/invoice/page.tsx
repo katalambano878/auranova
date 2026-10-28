@@ -1,16 +1,18 @@
 import { notFound } from "next/navigation";
 import { formatMoney } from "@/lib/money";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { getSettings } from "@/server/settings";
 
 export const dynamic = "force-dynamic";
 
 export default async function InvoicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [order, settings] = await Promise.all([
-    prisma.order.findUnique({ where: { id }, include: { items: true } }),
+  const [orderRes, settings] = await Promise.all([
+    supabaseAdmin().from("Order").select("*, items:OrderItem(*)").eq("id", id).maybeSingle(),
     getSettings(),
   ]);
+  throwIf(orderRes.error);
+  const order = orderRes.data;
   if (!order) notFound();
   const address = order.shippingAddress as Record<string, string | null>;
   return (
@@ -22,7 +24,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
       <p className="text-sm text-stone">{[address.line1, address.city, address.region].filter(Boolean).join(", ")}</p>
       <table className="mt-6 w-full text-left text-sm">
         <tbody>
-          {order.items.map((item) => (
+          {order.items.map((item: any) => (
             <tr key={item.id} className="border-b border-line">
               <td className="py-2">{item.quantity} × {item.name}{item.variantName ? ` (${item.variantName})` : ""}</td>
               <td>{item.sku}</td>

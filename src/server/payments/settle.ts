@@ -1,27 +1,27 @@
 import { decidePayment } from "@/lib/payments/decision";
 import { formatMoney } from "@/lib/money";
 import { audit } from "../audit";
-import { prisma } from "../db";
+import { nid, supabaseAdmin, throwIf } from "../db";
 import { moveStock } from "../inventory";
 import { notify, sendOrderNotice } from "../notifications";
 import { adapters, type ProviderName } from "./adapters";
 
 export async function verifyAttempt(reference: string) {
-  const attempt = await prisma.paymentAttempt.findUnique({
-    where: { reference },
-    include: { order: { include: { items: true } } },
-  });
-  if (!attempt) return { ok: false as const, error: "Payment attempt not found." };
+  const db = supabaseAdmin();
+  const { data: attempt, error } = await db.from("PaymentAttempt").select("*, order:Order(*, items:OrderItem(*))").eq("reference", reference).maybeSingle();
+  throwIf(error);
+  if (!attempt?.order) return { ok: false as const, error: "Payment attempt not found." };
+  const order = attempt.order;
   if (attempt.provider === "pay_on_delivery") {
-    return { ok: true as const, status: "unpaid" as const, orderNumber: attempt.order.number };
+    return { ok: true as const, status: "unpaid" as const, orderNumber: order.number };
   }
-  if (attempt.status === "SUCCESSFUL" || attempt.order.paymentStatus === "PAID") {
-    return { ok: true as const, status: "successful" as const, orderNumber: attempt.order.number };
+  if (attempt.status === "SUCCESSFUL" || order.paymentStatus === "PAID") {
+    return { ok: true as const, status: "successful" as const, orderNumber: order.number };
   }
-  if (attempt.order.fulfilmentStatus === "CANCELLED") {
+  if (order.fulfilmentStatus === "CANCELLED") {
     await notify({
       kind: "payment_after_cancel",
-      title: `Payment check for cancelled ${attempt.order.number}`,
+      title: `Payment check for cancelled ${order.number}`,
       body: "A payment check arrived after the reservation expired. It was not marked paid. Reconcile it in the provider dashboard if money was collected.",
     });
     return { ok: false as const, error: "This order is no longer payable." };
@@ -36,20 +36,17 @@ export async function verifyAttempt(reference: string) {
     reportedCurrency: verification.currency,
     status: verification.status,
   });
-  await prisma.paymentAttempt.update({
-    where: { id: attempt.id },
-    data: { rawVerify: verification.raw as object, providerReference: verification.providerReference || attempt.providerReference },
-  });
+  await db
+    .from("PaymentAttempt")
+    .update({ rawVerify: verification.raw as object, providerReference: verification.providerReference || attempt.providerReference })
+    .eq("id", attempt.id);
   if (decision === "accept") {
     await markPaid(attempt.id);
-    return { ok: true as const, status: "successful" as const, orderNumber: attempt.order.number };
+    return { ok: true as const, status: "successful" as const, orderNumber: order.number };
   }
   if (decision === "fail") {
-    await prisma.paymentAttempt.updateMany({
-      where: { id: attempt.id, status: { in: ["INITIATED", "PENDING"] } },
-      data: { status: "FAILED" },
-    });
-    return { ok: true as const, status: "failed" as const, orderNumber: attempt.order.number };
+    await db.from("PaymentAttempt").update({ status: "FAILED" }).eq("id", attempt.id).in("status", ["INITIATED", "PENDING"]);
+    return { ok: true as const, status: "failed" as const, orderNumber: order.number };
   }
   if (decision === "reject_amount" || decision === "reject_currency") {
     await audit({
@@ -60,62 +57,72 @@ export async function verifyAttempt(reference: string) {
     });
     return { ok: false as const, error: "The provider response did not match this order." };
   }
-  return { ok: true as const, status: "pending" as const, orderNumber: attempt.order.number };
+  return { ok: true as const, status: "pending" as const, orderNumber: order.number };
 }
 
 export async function markPaid(attemptId: string) {
-  const attempt = await prisma.paymentAttempt.findUnique({
-    where: { id: attemptId },
-    include: { order: { include: { items: true } } },
-  });
-  if (!attempt) return;
+  const db = supabaseAdmin();
+  const { data: attempt, error } = await db.from("PaymentAttempt").select("*, order:Order(*, items:OrderItem(*))").eq("id", attemptId).maybeSingle();
+  throwIf(error);
+  if (!attempt?.order) return;
   let shouldEmail = false;
   try {
-  await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${attempt.orderId} FOR UPDATE`;
-    const updated = await tx.paymentAttempt.updateMany({
-      where: { id: attempt.id, status: { in: ["INITIATED", "PENDING", "FAILED"] } },
-      data: { status: "SUCCESSFUL" },
-    });
-    if (updated.count === 0) return;
-    const order = await tx.order.findUnique({ where: { id: attempt.orderId } });
+    const updated = await db.from("PaymentAttempt").update({ status: "SUCCESSFUL" }).eq("id", attempt.id).in("status", ["INITIATED", "PENDING", "FAILED"]).select();
+    if (updated.error || !updated.data?.length) return;
+    const { data: order, error: orderError } = await db.from("Order").select("*").eq("id", attempt.orderId).maybeSingle();
+    throwIf(orderError);
     if (!order || order.paymentStatus === "PAID") return;
     if (order.fulfilmentStatus === "CANCELLED") throw new Error("CANCELLED");
-    for (const item of attempt.order.items) {
+    for (const item of attempt.order.items || []) {
       if (!item.productId) continue;
-      const product = await tx.product.findUnique({ where: { id: item.productId } });
-      const moved = await moveStock(tx, {
-        productId: item.productId,
-        variantId: item.variantId,
-        quantity: item.quantity,
-        trackInventory: product?.trackInventory ?? true,
-      }, "commit", "sale", order.id);
+      const { data: product, error: productError } = await db.from("Product").select("trackInventory, unitsSold").eq("id", item.productId).maybeSingle();
+      throwIf(productError);
+      const moved = await moveStock(
+        {
+          productId: item.productId,
+          variantId: item.variantId,
+          quantity: item.quantity,
+          trackInventory: product?.trackInventory ?? true,
+        },
+        "commit",
+        "sale",
+        order.id,
+      );
       if (!moved) throw new Error("STOCK");
-      await tx.product.update({ where: { id: item.productId }, data: { unitsSold: { increment: item.quantity } } });
-    }
-    await tx.order.update({
-      where: { id: order.id },
-      data: {
-        paymentStatus: "PAID",
-        paidAt: new Date(),
-        fulfilmentStatus: order.fulfilmentStatus === "PENDING" ? "CONFIRMED" : order.fulfilmentStatus,
-        confirmationSentAt: order.confirmationSentAt ?? new Date(),
-      },
-    });
-    await tx.orderEvent.create({
-      data: { orderId: order.id, kind: "payment", fromStatus: order.paymentStatus, toStatus: "PAID", note: attempt.provider },
-    });
-    if (order.couponCode && !order.couponCounted) {
-      const coupon = await tx.coupon.findUnique({ where: { code: order.couponCode } });
-      if (coupon) {
-        await tx.couponRedemption.create({
-          data: { couponId: coupon.id, orderId: order.id, userId: order.userId, email: order.email, amount: order.discount },
-        });
-        await tx.order.update({ where: { id: order.id }, data: { couponCounted: true } });
-      }
+      await db.from("Product").update({ unitsSold: (product?.unitsSold ?? 0) + item.quantity }).eq("id", item.productId);
     }
     shouldEmail = order.confirmationSentAt == null;
-  });
+    await db
+      .from("Order")
+      .update({
+        paymentStatus: "PAID",
+        paidAt: new Date().toISOString(),
+        fulfilmentStatus: order.fulfilmentStatus === "PENDING" ? "CONFIRMED" : order.fulfilmentStatus,
+        confirmationSentAt: order.confirmationSentAt ?? new Date().toISOString(),
+      })
+      .eq("id", order.id);
+    await db.from("OrderEvent").insert({
+      id: nid(),
+      orderId: order.id,
+      kind: "payment",
+      fromStatus: order.paymentStatus,
+      toStatus: "PAID",
+      note: attempt.provider,
+    });
+    if (order.couponCode && !order.couponCounted) {
+      const { data: coupon, error: couponError } = await db.from("Coupon").select("id").eq("code", order.couponCode).maybeSingle();
+      throwIf(couponError);
+      if (coupon) {
+        await db.from("CouponRedemption").insert({
+          couponId: coupon.id,
+          orderId: order.id,
+          userId: order.userId,
+          email: order.email,
+          amount: order.discount,
+        });
+        await db.from("Order").update({ couponCounted: true }).eq("id", order.id);
+      }
+    }
   } catch (error) {
     if (error instanceof Error && error.message === "CANCELLED") {
       await notify({
@@ -136,7 +143,8 @@ export async function markPaid(attemptId: string) {
     throw error;
   }
   if (shouldEmail) {
-    const fresh = await prisma.order.findUnique({ where: { id: attempt.orderId } });
+    const { data: fresh, error: freshError } = await db.from("Order").select("*").eq("id", attempt.orderId).maybeSingle();
+    throwIf(freshError);
     if (fresh) {
       await sendOrderNotice({
         email: fresh.email,
@@ -156,9 +164,13 @@ export async function acceptWebhook(provider: ProviderName, rawBody: string, hea
     return { status: 400 };
   }
   if (!authResult.ok) return { status: authResult.status };
+  const db = supabaseAdmin();
   try {
-    await prisma.webhookEvent.create({
-      data: { provider, eventId: authResult.eventId, payload: authResult.payload as object },
+    await db.from("WebhookEvent").insert({
+      id: nid(),
+      provider,
+      eventId: authResult.eventId,
+      payload: authResult.payload as object,
     });
   } catch {
     return { status: 200 };
@@ -168,9 +180,10 @@ export async function acceptWebhook(provider: ProviderName, rawBody: string, hea
     const result = await verifyAttempt(authResult.reference);
     outcome = result.ok ? result.status : result.error;
   }
-  await prisma.webhookEvent.update({
-    where: { provider_eventId: { provider, eventId: authResult.eventId } },
-    data: { processedAt: new Date(), outcome },
-  });
+  await db
+    .from("WebhookEvent")
+    .update({ processedAt: new Date().toISOString(), outcome })
+    .eq("provider", provider)
+    .eq("eventId", authResult.eventId);
   return { status: 200 };
 }

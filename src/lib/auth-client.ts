@@ -1,6 +1,9 @@
-import { createAuthClient } from "better-auth/react";
-import { twoFactorClient } from "better-auth/client/plugins";
-
-export const authClient = createAuthClient({
-  plugins: [twoFactorClient({ twoFactorPage: "/account/two-factor" })],
-});
+export const authClient = {
+  resetPassword: async () => ({
+    error: { message: "Use the password reset link from your email in this browser, then submit a new password here." },
+  }),
+  twoFactor: {
+    enable: async () => ({ error: { message: "Two-factor sign-in is not configured for this store." } }),
+    verifyTotp: async () => ({ error: { message: "Two-factor sign-in is not configured for this store." } }),
+  },
+};

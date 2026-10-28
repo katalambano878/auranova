@@ -1,17 +1,18 @@
 import { savePromotion } from "@/server/actions/admin";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { AdminForm } from "@/components/admin/form";
 import { Input, Label } from "@/components/ui/fields";
 
 export const dynamic = "force-dynamic";
 
 export default async function PromotionsPage() {
-  const promotions = await prisma.promotion.findMany({ orderBy: { position: "asc" } });
+  const { data: promotions, error } = await supabaseAdmin().from("Promotion").select("*").order("position");
+  throwIf(error);
   return (
     <main className="max-w-3xl">
       <h1 className="font-serif text-4xl">Promotions</h1>
       <ul className="mt-6 space-y-4">
-        {promotions.map((promotion) => (
+        {(promotions || []).map((promotion) => (
           <li key={promotion.id} className="border border-line p-4">
             <AdminForm action={savePromotion}>
               <input type="hidden" name="id" value={promotion.id} />

@@ -1,15 +1,150 @@
+import "dotenv/config";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../src/generated/prisma/client";
+import { nid, supabaseAdmin, throwIf } from "../src/server/db";
 
-const connectionString = process.env.DATABASE_URL || "";
-const prisma = new PrismaClient({
-  adapter: new PrismaPg({
-    connectionString,
-    ssl: connectionString.includes("supabase") ? { rejectUnauthorized: false } : undefined,
-  }),
-});
+const db = supabaseAdmin();
+
+const prisma = {
+  category: {
+    upsert: async ({ update, create }: { where?: { slug: string }; update?: Record<string, unknown>; create: Record<string, unknown> }) => {
+      throwIf((await db.from("Category").upsert({ id: nid(), ...create, ...(update || {}) }, { onConflict: "slug" })).error);
+    },
+    findMany: async () => {
+      const { data, error } = await db.from("Category").select("*");
+      throwIf(error);
+      return data || [];
+    },
+  },
+  brand: {
+    upsert: async ({ update, create }: { where?: { slug: string }; update?: Record<string, unknown>; create: Record<string, unknown> }) => {
+      throwIf((await db.from("Brand").upsert({ id: nid(), ...create, ...(update || {}) }, { onConflict: "slug" })).error);
+    },
+    findMany: async () => {
+      const { data, error } = await db.from("Brand").select("*");
+      throwIf(error);
+      return data || [];
+    },
+  },
+  product: {
+    upsert: async ({ where, update, create }: { where: { sku: string }; update: Record<string, unknown>; create: Record<string, unknown> & { images?: { create: Record<string, unknown>[] } } }) => {
+      const { data: existing, error: existingError } = await db.from("Product").select("id").eq("sku", where.sku).maybeSingle();
+      throwIf(existingError);
+      if (existing) {
+        throwIf((await db.from("Product").update(update).eq("id", existing.id)).error);
+        return { id: existing.id, ...update };
+      }
+      const productId = nid();
+      const { images, ...productRow } = create;
+      throwIf((await db.from("Product").insert({ id: productId, ...productRow })).error);
+      for (const image of images?.create || []) {
+        throwIf((await db.from("ProductImage").insert({ productId, ...image })).error);
+      }
+      return { id: productId, ...productRow };
+    },
+    findUnique: async ({ where }: { where: { sku: string } }) => {
+      const { data, error } = await db.from("Product").select("*").eq("sku", where.sku).maybeSingle();
+      throwIf(error);
+      return data;
+    },
+    findMany: async ({ where }: { where: { isDemo?: boolean } }) => {
+      let query = db.from("Product").select("*");
+      if (where.isDemo != null) query = query.eq("isDemo", where.isDemo);
+      const { data, error } = await query;
+      throwIf(error);
+      return data || [];
+    },
+  },
+  productVariant: {
+    upsert: async ({ where, update, create }: { where: { sku: string }; update: Record<string, unknown>; create: Record<string, unknown> }) => {
+      const { data: existing, error } = await db.from("ProductVariant").select("id").eq("sku", where.sku).maybeSingle();
+      throwIf(error);
+      if (existing) throwIf((await db.from("ProductVariant").update(update).eq("id", existing.id)).error);
+      else throwIf((await db.from("ProductVariant").insert(create)).error);
+    },
+  },
+  productRelation: {
+    upsert: async ({ create }: { where?: unknown; update?: unknown; create: { productId: string; relatedId: string } }) => {
+      throwIf((await db.from("ProductRelation").upsert(create, { onConflict: "productId,relatedId" })).error);
+    },
+  },
+  collection: {
+    upsert: async ({ where, create }: { where: { slug: string }; update?: unknown; create: Record<string, unknown> }) => {
+      throwIf((await db.from("Collection").upsert({ id: nid(), ...create }, { onConflict: "slug" })).error);
+      const { data, error } = await db.from("Collection").select("*").eq("slug", where.slug).single();
+      throwIf(error);
+      return data;
+    },
+  },
+  collectionProduct: {
+    upsert: async ({ update, create }: { where?: unknown; update?: Record<string, unknown>; create: Record<string, unknown> }) => {
+      throwIf((await db.from("CollectionProduct").upsert({ ...create, ...(update || {}) }, { onConflict: "collectionId,productId" })).error);
+    },
+  },
+  coupon: {
+    upsert: async ({ create }: { where?: unknown; update?: unknown; create: Record<string, unknown> }) => {
+      throwIf((await db.from("Coupon").upsert({ id: nid(), ...create }, { onConflict: "code" })).error);
+    },
+  },
+  shippingZone: {
+    upsert: async ({ where, create }: { where: { id: string }; update?: unknown; create: Record<string, unknown> }) => {
+      throwIf((await db.from("ShippingZone").upsert({ ...create }, { onConflict: "id" })).error);
+      const { data, error } = await db.from("ShippingZone").select("*").eq("id", where.id).single();
+      throwIf(error);
+      return data;
+    },
+  },
+  shippingMethod: {
+    upsert: async ({ update, create }: { where?: { id: string }; update?: Record<string, unknown>; create: Record<string, unknown> }) => {
+      throwIf((await db.from("ShippingMethod").upsert({ ...create, ...(update || {}) }, { onConflict: "id" })).error);
+    },
+  },
+  promotion: {
+    upsert: async ({ create }: { where?: unknown; update?: unknown; create: Record<string, unknown> }) => {
+      throwIf((await db.from("Promotion").upsert({ ...create }, { onConflict: "id" })).error);
+    },
+  },
+  review: {
+    findFirst: async ({ where }: { where: { productId: string; isSample: boolean } }) => {
+      const { data, error } = await db.from("Review").select("id").eq("productId", where.productId).eq("isSample", where.isSample).maybeSingle();
+      throwIf(error);
+      return data;
+    },
+    create: async ({ data }: { data: Record<string, unknown> }) => {
+      throwIf((await db.from("Review").insert({ id: nid(), ...data })).error);
+    },
+  },
+  contentPage: {
+    upsert: async ({ create }: { where?: { slug: string }; update?: unknown; create: Record<string, unknown> }) => {
+      throwIf((await db.from("ContentPage").upsert({ id: nid(), ...create }, { onConflict: "slug" })).error);
+    },
+  },
+  faqItem: {
+    count: async () => {
+      const { count, error } = await db.from("FaqItem").select("id", { count: "exact", head: true });
+      throwIf(error);
+      return count ?? 0;
+    },
+    create: async ({ data }: { data: Record<string, unknown> }) => {
+      throwIf((await db.from("FaqItem").insert({ id: nid(), ...data })).error);
+    },
+  },
+  order: {
+    count: async ({ where }: { where: { isDemo: boolean } }) => {
+      const { count, error } = await db.from("Order").select("id", { count: "exact", head: true }).eq("isDemo", where.isDemo);
+      throwIf(error);
+      return count ?? 0;
+    },
+    create: async ({ data }: { data: Record<string, unknown> & { items?: { create: Record<string, unknown>[] } } }) => {
+      const { items, ...order } = data;
+      const orderId = nid();
+      throwIf((await db.from("Order").insert({ id: orderId, ...order })).error);
+      for (const item of items?.create || []) {
+        throwIf((await db.from("OrderItem").insert({ id: nid(), orderId, ...item })).error);
+      }
+    },
+  },
+};
 
 function mark(title: string, tone: string) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -30,11 +165,11 @@ async function main() {
   await mkdir(path.join(process.cwd(), "public/demo"), { recursive: true });
   await writeFile(path.join(process.cwd(), "public/demo/hero.svg"), mark("Considered goods", "#1B4332"));
 
-  await prisma.storeSettings.upsert({
-    where: { id: "default" },
-    update: {},
-    create: {
-      id: "default",
+  throwIf(
+    (
+      await db.from("StoreSettings").upsert(
+        {
+          id: "default",
       storeName: "AuraNova",
       tagline: "Considered goods for everyday living.",
       currency: "GHS",
@@ -61,8 +196,11 @@ async function main() {
       metaTitle: "AuraNova",
       metaDescription: "AuraNova sells considered general merchandise for delivery across Ghana.",
       payOnDeliveryEnabled: true,
-    },
-  });
+        },
+        { onConflict: "id" },
+      )
+    ).error,
+  );
 
   const categorySeed = [
     ["home", "Home", "Textiles, tableware, and furniture."],
@@ -290,10 +428,7 @@ async function main() {
   }
 }
 
-main()
-  .then(() => prisma.$disconnect())
-  .catch(async (error) => {
-    console.error(error);
-    await prisma.$disconnect();
-    process.exit(1);
-  });
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { prisma } from "@/server/db";
-import { availableUnits, priceWithSettings, productInclude } from "@/server/catalog";
+import { supabaseAdmin, throwIf } from "@/server/db";
+import { availableUnits, priceWithSettings, productEmbed } from "@/server/catalog";
 import { getSettings } from "@/server/settings";
 import { CategoryStage } from "@/components/store/category-stage";
 import { FeaturedShelf } from "@/components/store/featured-shelf";
@@ -19,26 +19,31 @@ export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const settings = await getSettings();
-  const [categories, featured, featuredProducts, promotion] = await Promise.all([
-    prisma.category.findMany({
-      where: { deletedAt: null },
-      orderBy: { position: "asc" },
-      include: { _count: { select: { products: { where: { status: "PUBLISHED", deletedAt: null } } } } },
-    }),
-    prisma.product.findMany({
-      where: { status: "PUBLISHED", deletedAt: null },
-      include: { images: { orderBy: { position: "asc" }, take: 1 } },
-      orderBy: [{ featured: "desc" }, { createdAt: "desc" }],
-      take: 6,
-    }),
-    prisma.product.findMany({
-      where: { status: "PUBLISHED", deletedAt: null, featured: true },
-      include: productInclude,
-      orderBy: { createdAt: "desc" },
-      take: 4,
-    }),
-    prisma.promotion.findFirst({ where: { active: true }, orderBy: { position: "asc" } }),
+  const db = supabaseAdmin();
+  const [categoriesRes, featuredRes, featuredProductsRes, promotionRes] = await Promise.all([
+    db.from("Category").select("*").is("deletedAt", null).order("position"),
+    db.from("Product").select("*, images:ProductImage(url, alt, position)").eq("status", "PUBLISHED").is("deletedAt", null).order("featured", { ascending: false }).order("createdAt", { ascending: false }).limit(6),
+    db.from("Product").select(productEmbed).eq("status", "PUBLISHED").is("deletedAt", null).eq("featured", true).order("createdAt", { ascending: false }).limit(4),
+    db.from("Promotion").select("*").eq("active", true).order("position").limit(1).maybeSingle(),
   ]);
+  throwIf(categoriesRes.error);
+  throwIf(featuredRes.error);
+  throwIf(featuredProductsRes.error);
+  throwIf(promotionRes.error);
+  const categoriesRaw = categoriesRes.data || [];
+  const categories = await Promise.all(
+    categoriesRaw.map(async (category) => {
+      const { count, error } = await db.from("Product").select("id", { count: "exact", head: true }).eq("categoryId", category.id).eq("status", "PUBLISHED").is("deletedAt", null);
+      throwIf(error);
+      return { ...category, _count: { products: count ?? 0 } };
+    }),
+  );
+  const featured = (featuredRes.data || []).map((product) => ({
+    ...product,
+    images: [...(product.images || [])].sort((a, b) => a.position - b.position).slice(0, 1),
+  }));
+  const featuredProducts = featuredProductsRes.data || [];
+  const promotion = promotionRes.data;
   const pictures = featured.map((product) => product.images[0]?.url).filter((url): url is string => Boolean(url));
   const title = splitTitle(settings.heroTitle);
   return (
@@ -77,7 +82,7 @@ export default async function HomePage() {
           const variant = product.variants[0];
           const price = priceWithSettings(settings, product, variant);
           const units = product.variants.length
-            ? product.variants.reduce((sum, item) => sum + availableUnits(product.trackInventory, item.onHand, item.reserved), 0)
+            ? product.variants.reduce((sum: any, item: any) => sum + availableUnits(product.trackInventory, item.onHand, item.reserved), 0)
             : availableUnits(product.trackInventory, product.onHand, product.reserved);
           return {
             href: `/products/${product.slug}`,

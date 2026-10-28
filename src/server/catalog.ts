@@ -1,28 +1,29 @@
 import { effectivePrice, type EffectivePrice } from "@/lib/pricing";
-import { prisma } from "./db";
+import { supabaseAdmin, throwIf } from "./db";
 import { getSettings } from "./settings";
 
-export const productInclude = {
-  images: { orderBy: { position: "asc" as const } },
-  variants: { orderBy: { position: "asc" as const } },
-  category: true,
-  brand: true,
-} as const;
+export const productEmbed = "*, images:ProductImage(id, url, alt, position, isPrimary), variants:ProductVariant(id, sku, label, options, price, salePrice, onHand, reserved, weightGrams, position), category:Category(id, name, slug, description, imageUrl, position, deletedAt), brand:Brand(id, name, slug, deletedAt)";
+export const productInclude = productEmbed;
 
 type Priced = {
   price: number;
   salePrice: number | null;
-  saleStartsAt: Date | null;
-  saleEndsAt: Date | null;
+  saleStartsAt: string | Date | null;
+  saleEndsAt: string | Date | null;
 };
+
+function when(value: string | Date | null | undefined) {
+  if (!value) return null;
+  return value instanceof Date ? value : new Date(value);
+}
 
 export async function priceOf(item: Priced, variant?: { price: number; salePrice: number | null } | null) {
   const settings = await getSettings();
   return effectivePrice({
     price: variant?.price ?? item.price,
     salePrice: variant ? variant.salePrice : item.salePrice,
-    saleStartsAt: item.saleStartsAt,
-    saleEndsAt: item.saleEndsAt,
+    saleStartsAt: when(item.saleStartsAt),
+    saleEndsAt: when(item.saleEndsAt),
     salePricingEnabled: settings.salePricingEnabled,
   });
 }
@@ -35,8 +36,8 @@ export function priceWithSettings(
   return effectivePrice({
     price: variant?.price ?? item.price,
     salePrice: variant ? variant.salePrice : item.salePrice,
-    saleStartsAt: item.saleStartsAt,
-    saleEndsAt: item.saleEndsAt,
+    saleStartsAt: when(item.saleStartsAt),
+    saleEndsAt: when(item.saleEndsAt),
     salePricingEnabled: settings.salePricingEnabled,
   });
 }
@@ -63,31 +64,45 @@ export type ShopQuery = {
 const pageSize = 12;
 
 export async function searchProductIds(q: string) {
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT id FROM "Product"
-    WHERE status = 'PUBLISHED' AND "deletedAt" IS NULL
-      AND to_tsvector('english', "searchText") @@ plainto_tsquery('english', ${q})
-  `;
-  return rows.map((row) => row.id);
+  const { data, error } = await supabaseAdmin().rpc("search_product_ids", { q });
+  throwIf(error);
+  return ((data || []) as { id: string }[]).map((row) => row.id);
 }
+
+type ListedProduct = {
+  id: string;
+  slug: string;
+  name: string;
+  createdAt: string;
+  featured: boolean;
+  bestseller: boolean;
+  unitsSold: number;
+  trackInventory: boolean;
+  onHand: number;
+  reserved: number;
+  price: number;
+  salePrice: number | null;
+  saleStartsAt: string | null;
+  saleEndsAt: string | null;
+  images: { url: string; alt: string | null }[];
+  variants: { price: number; salePrice: number | null; onHand: number; reserved: number; options: { color?: string; size?: string } }[];
+  reviews?: { rating: number }[];
+};
 
 export async function listProducts(query: ShopQuery) {
   const settings = await getSettings();
-  const where = {
-    status: "PUBLISHED" as const,
-    deletedAt: null,
-    ...(query.category ? { category: { slug: query.category, deletedAt: null } } : {}),
-    ...(query.brand ? { brand: { slug: query.brand, deletedAt: null } } : {}),
-    ...(query.colour ? { variants: { some: { options: { path: ["color"], equals: query.colour } } } } : {}),
-    ...(query.size ? { variants: { some: { options: { path: ["size"], equals: query.size } } } } : {}),
-  };
-  let products = await prisma.product.findMany({
-    where,
-    include: {
-      ...productInclude,
-      reviews: { where: { status: "PUBLISHED", isSample: false }, select: { rating: true } },
-    },
-  });
+  let request = supabaseAdmin()
+    .from("Product")
+    .select(`${productEmbed}, reviews:Review(rating)`)
+    .eq("status", "PUBLISHED")
+    .is("deletedAt", null);
+  if (query.category) request = request.eq("category.slug", query.category).is("category.deletedAt", null);
+  if (query.brand) request = request.eq("brand.slug", query.brand);
+  const { data, error } = await request;
+  throwIf(error);
+  let products = (data || []) as unknown as ListedProduct[];
+  if (query.colour) products = products.filter((product) => product.variants.some((variant) => variant.options?.color === query.colour));
+  if (query.size) products = products.filter((product) => product.variants.some((variant) => variant.options?.size === query.size));
   if (query.q) {
     const ids = new Set(await searchProductIds(query.q));
     products = products.filter((product) => ids.has(product.id));
@@ -100,10 +115,9 @@ export async function listProducts(query: ShopQuery) {
     const units = product.variants.length
       ? product.variants.reduce((sum, variant) => sum + availableUnits(product.trackInventory, variant.onHand, variant.reserved), 0)
       : availableUnits(product.trackInventory, product.onHand, product.reserved);
-    const ratingCount = product.reviews.length;
-    const ratingAverage = ratingCount
-      ? product.reviews.reduce((sum, review) => sum + review.rating, 0) / ratingCount
-      : null;
+    const reviews = (product.reviews || []).filter((review) => review.rating != null);
+    const ratingCount = reviews.length;
+    const ratingAverage = ratingCount ? reviews.reduce((sum, review) => sum + review.rating, 0) / ratingCount : null;
     const cheapest = prices.reduce((best, price) => (price.current < best.current ? price : best));
     return { product, current, units, ratingAverage, ratingCount, onSale: cheapest.onSale, compareAt: cheapest.compareAt };
   });
@@ -117,12 +131,12 @@ export async function listProducts(query: ShopQuery) {
   });
   const sort = query.sort ?? "featured";
   filtered.sort((a, b) => {
-    if (sort === "newest") return b.product.createdAt.getTime() - a.product.createdAt.getTime();
+    if (sort === "newest") return new Date(b.product.createdAt).getTime() - new Date(a.product.createdAt).getTime();
     if (sort === "price-asc") return a.current - b.current;
     if (sort === "price-desc") return b.current - a.current;
     if (sort === "popular") return b.product.unitsSold - a.product.unitsSold;
     if (a.product.featured !== b.product.featured) return a.product.featured ? -1 : 1;
-    return b.product.createdAt.getTime() - a.product.createdAt.getTime();
+    return new Date(b.product.createdAt).getTime() - new Date(a.product.createdAt).getTime();
   });
   const page = Math.max(query.page ?? 1, 1);
   const start = (page - 1) * pageSize;
@@ -136,50 +150,60 @@ export async function listProducts(query: ShopQuery) {
 }
 
 export async function getProductBySlug(slug: string) {
-  const product = await prisma.product.findFirst({
-    where: { slug, status: "PUBLISHED", deletedAt: null },
-    include: {
-      ...productInclude,
-      reviews: { where: { status: "PUBLISHED" }, orderBy: { createdAt: "desc" } },
-      relationsFrom: { include: { related: { include: productInclude } } },
-    },
-  });
-  if (product) return { product, redirectTo: null };
-  const redirect = await prisma.redirect.findUnique({ where: { fromPath: `/products/${slug}` } });
-  return { product: null, redirectTo: redirect?.toPath ?? null };
+  const { data, error } = await supabaseAdmin()
+    .from("Product")
+    .select(`${productEmbed}, reviews:Review(*)`)
+    .eq("slug", slug)
+    .eq("status", "PUBLISHED")
+    .is("deletedAt", null)
+    .maybeSingle();
+  throwIf(error);
+  if (data) {
+    const relations = await supabaseAdmin()
+      .from("ProductRelation")
+      .select(`relatedId, related:Product!ProductRelation_relatedId_fkey(${productEmbed})`)
+      .eq("productId", data.id);
+    throwIf(relations.error);
+    return { product: { ...data, relationsFrom: relations.data || [] }, redirectTo: null };
+  }
+  const redirect = await supabaseAdmin().from("Redirect").select("toPath").eq("fromPath", `/products/${slug}`).maybeSingle();
+  throwIf(redirect.error);
+  return { product: null, redirectTo: redirect.data?.toPath ?? null };
 }
 
 export async function relatedProducts(productId: string, categoryId: string, explicitIds: string[]) {
   const explicit = explicitIds.length
-    ? await prisma.product.findMany({
-        where: { id: { in: explicitIds }, status: "PUBLISHED", deletedAt: null },
-        include: productInclude,
-      })
-    : [];
-  const more = await prisma.product.findMany({
-    where: { categoryId, status: "PUBLISHED", deletedAt: null, id: { notIn: [productId, ...explicit.map((item) => item.id)] } },
-    include: productInclude,
-    orderBy: { unitsSold: "desc" },
-    take: Math.max(4 - explicit.length, 0),
-  });
-  return [...explicit, ...more].slice(0, 4);
+    ? await supabaseAdmin().from("Product").select(productEmbed).in("id", explicitIds).eq("status", "PUBLISHED").is("deletedAt", null)
+    : { data: [], error: null };
+  throwIf(explicit.error);
+  const more = await supabaseAdmin()
+    .from("Product")
+    .select(productEmbed)
+    .eq("categoryId", categoryId)
+    .eq("status", "PUBLISHED")
+    .is("deletedAt", null)
+    .not("id", "in", `(${[productId, ...explicitIds].join(",")})`)
+    .order("unitsSold", { ascending: false })
+    .limit(Math.max(4 - (explicit.data?.length || 0), 0));
+  throwIf(more.error);
+  return [...(explicit.data || []), ...(more.data || [])].slice(0, 4);
 }
 
 export async function filterOptions() {
   const [categories, brands, variants] = await Promise.all([
-    prisma.category.findMany({ where: { deletedAt: null }, orderBy: { position: "asc" } }),
-    prisma.brand.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
-    prisma.productVariant.findMany({
-      where: { product: { status: "PUBLISHED", deletedAt: null } },
-      select: { options: true },
-    }),
+    supabaseAdmin().from("Category").select("*").is("deletedAt", null).order("position"),
+    supabaseAdmin().from("Brand").select("*").is("deletedAt", null).order("name"),
+    supabaseAdmin().from("ProductVariant").select("options, product:Product!inner(status, deletedAt)").eq("product.status", "PUBLISHED").is("product.deletedAt", null),
   ]);
+  throwIf(categories.error);
+  throwIf(brands.error);
+  throwIf(variants.error);
   const colours = new Set<string>();
   const sizes = new Set<string>();
-  for (const variant of variants) {
+  for (const variant of variants.data || []) {
     const options = variant.options as { color?: string; size?: string };
-    if (options.color) colours.add(options.color);
-    if (options.size) sizes.add(options.size);
+    if (options?.color) colours.add(options.color);
+    if (options?.size) sizes.add(options.size);
   }
-  return { categories, brands, colours: [...colours], sizes: [...sizes] };
+  return { categories: categories.data || [], brands: brands.data || [], colours: [...colours], sizes: [...sizes] };
 }

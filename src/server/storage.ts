@@ -1,7 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { prisma } from "./db";
+import { nid, supabaseAdmin, throwIf } from "./db";
 
 const types: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -19,21 +16,6 @@ function sniff(bytes: Buffer) {
   return null;
 }
 
-function s3() {
-  if (!process.env.S3_BUCKET || !process.env.S3_ACCESS_KEY_ID || !process.env.S3_SECRET_ACCESS_KEY || !process.env.S3_REGION) {
-    return null;
-  }
-  return new S3Client({
-    region: process.env.S3_REGION,
-    endpoint: process.env.S3_ENDPOINT || undefined,
-    credentials: {
-      accessKeyId: process.env.S3_ACCESS_KEY_ID,
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
-    },
-    forcePathStyle: Boolean(process.env.S3_ENDPOINT),
-  });
-}
-
 export async function saveImage(file: File, alt: string) {
   if (file.size <= 0 || file.size > 5 * 1024 * 1024) {
     return { ok: false as const, error: "Images must be between 1 byte and 5 MB." };
@@ -42,23 +24,12 @@ export async function saveImage(file: File, alt: string) {
   const mime = sniff(bytes);
   if (!mime || !types[mime]) return { ok: false as const, error: "Upload a JPEG, PNG, WebP, or GIF." };
   const key = `uploads/${new Date().getUTCFullYear()}/${crypto.randomUUID()}.${types[mime]}`;
-  const client = s3();
-  let url = `/storage/${key}`;
-  if (client && process.env.S3_BUCKET) {
-    await client.send(new PutObjectCommand({
-      Bucket: process.env.S3_BUCKET,
-      Key: key,
-      Body: bytes,
-      ContentType: mime,
-    }));
-    url = `${(process.env.S3_PUBLIC_URL || "").replace(/\/$/, "")}/${key}`;
-  } else {
-    const root = path.resolve(/*turbopackIgnore: true*/ process.env.STORAGE_ROOT || "./storage");
-    const target = path.resolve(root, key);
-    if (!target.startsWith(root)) return { ok: false as const, error: "Invalid storage path." };
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, bytes);
-  }
-  const asset = await prisma.mediaAsset.create({ data: { url, alt, mime, size: bytes.length } });
-  return { ok: true as const, asset };
+  const admin = supabaseAdmin();
+  const uploaded = await admin.storage.from("media").upload(key, bytes, { contentType: mime, upsert: false });
+  if (uploaded.error) return { ok: false as const, error: "The image could not be stored." };
+  const { data } = admin.storage.from("media").getPublicUrl(key);
+  const url = data.publicUrl;
+  const row = await admin.from("MediaAsset").insert({ id: nid(), url, alt, mime, size: bytes.length }).select().single();
+  throwIf(row.error);
+  return { ok: true as const, asset: row.data };
 }

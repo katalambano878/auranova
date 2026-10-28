@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { authClient } from "@/lib/auth-client";
+import { requestPasswordResetAction, signInAction, signUpAction } from "@/server/actions/auth";
 import { syncCart } from "@/server/actions/storefront";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/fields";
@@ -24,17 +24,15 @@ export function AuthForm({ mode }: { mode: "login" | "register" | "forgot" }) {
       const password = String(data.get("password") || "");
       const name = String(data.get("name") || "");
       if (mode === "forgot") {
-        const result = await authClient.requestPasswordReset({ email, redirectTo: "/account/reset-password" });
+        const result = await requestPasswordResetAction(email);
         setPending(false);
-        setDone(result.error ? "" : "If an account exists and email is configured, a reset link is on its way. Otherwise the request is stored for staff.");
-        if (result.error) setError(result.error.message || "Could not start a reset.");
+        setDone(result.ok ? "If an account exists, a reset link is on its way." : "");
+        if (!result.ok) setError(result.error);
         return;
       }
-      const result = mode === "login"
-        ? await authClient.signIn.email({ email, password })
-        : await authClient.signUp.email({ email, password, name });
+      const result = mode === "login" ? await signInAction(email, password) : await signUpAction(name, email, password);
       setPending(false);
-      if (result.error) return setError(result.error.message || "Could not continue.");
+      if (!result.ok) return setError(result.error);
       await syncCart();
       router.push(destination);
       router.refresh();

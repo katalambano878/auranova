@@ -1,4 +1,4 @@
-import { prisma } from "./db";
+import { nid, supabaseAdmin, throwIf } from "./db";
 
 export async function audit(input: {
   actorId?: string | null;
@@ -7,13 +7,13 @@ export async function audit(input: {
   entityId?: string | null;
   metadata?: Record<string, unknown>;
 }) {
-  await prisma.auditLog.create({
-    data: {
-      actorId: input.actorId ?? null,
-      action: input.action,
-      entity: input.entity,
-      entityId: input.entityId ?? null,
-      metadata: input.metadata ? JSON.parse(JSON.stringify(input.metadata)) : undefined,
-    },
+  const { error } = await supabaseAdmin().from("AuditLog").insert({
+    id: nid(),
+    actorId: input.actorId ?? null,
+    action: input.action,
+    entity: input.entity,
+    entityId: input.entityId ?? null,
+    metadata: input.metadata ? JSON.parse(JSON.stringify(input.metadata)) : null,
   });
+  throwIf(error);
 }

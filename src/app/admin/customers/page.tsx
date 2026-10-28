@@ -1,16 +1,24 @@
 import Link from "next/link";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function CustomersPage() {
-  const customers = await prisma.user.findMany({
-    where: { role: "customer" },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-    include: { _count: { select: { orders: true } } },
-  });
-  const requests = await prisma.dataRequest.findMany({ where: { status: "PENDING" }, include: { user: true } });
+  const db = supabaseAdmin();
+  const [customersRes, requestsRes] = await Promise.all([
+    db.from("User").select("*").eq("role", "customer").order("createdAt", { ascending: false }).limit(100),
+    db.from("DataRequest").select("*, user:User(*)").eq("status", "PENDING"),
+  ]);
+  throwIf(customersRes.error);
+  throwIf(requestsRes.error);
+  const customers = await Promise.all(
+    (customersRes.data || []).map(async (customer) => {
+      const { count, error } = await db.from("Order").select("id", { count: "exact", head: true }).eq("userId", customer.id);
+      throwIf(error);
+      return { ...customer, _count: { orders: count ?? 0 } };
+    }),
+  );
+  const requests = requestsRes.data || [];
   return (
     <main>
       <h1 className="font-serif text-4xl">Customers</h1>

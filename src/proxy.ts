@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 export function proxy(request: NextRequest) {
-  const token = request.cookies.get("better-auth.session_token") || request.cookies.get("__Secure-better-auth.session_token");
+  const token = request.cookies.getAll().some((cookie) => cookie.name.startsWith("sb-") && cookie.name.includes("auth-token") && cookie.value);
   if (!token) {
     const url = request.nextUrl.clone();
     url.pathname = "/account/login";

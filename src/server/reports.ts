@@ -1,29 +1,41 @@
-import { prisma } from "./db";
-import { startOfDayInTimeZone, startOfMonthInTimeZone, accraDayKey } from "@/lib/time";
+import { accraDayKey, startOfDayInTimeZone, startOfMonthInTimeZone } from "@/lib/time";
+import { supabaseAdmin, throwIf } from "./db";
 
 const paidStatuses = ["PAID", "PARTIALLY_REFUNDED"] as const;
 
+type OrderRow = {
+  total: number;
+  paidAt: string | null;
+  isDemo: boolean;
+  refunds: { status: string; amount: number }[];
+};
+
+function net(order: OrderRow) {
+  const refunded = (order.refunds || []).filter((refund) => refund.status === "REFUNDED").reduce((sum, refund) => sum + refund.amount, 0);
+  return Math.max(order.total - refunded, 0);
+}
+
 export async function salesReport(from: Date, to: Date) {
-  const orders = await prisma.order.findMany({
-    where: { paidAt: { gte: from, lt: to }, paymentStatus: { in: [...paidStatuses] } },
-    include: { refunds: true, items: true },
-  });
-  const net = (order: (typeof orders)[number]) => {
-    const refunded = order.refunds.filter((refund) => refund.status === "REFUNDED").reduce((sum, refund) => sum + refund.amount, 0);
-    return Math.max(order.total - refunded, 0);
-  };
-  const revenue = orders.reduce((sum, order) => sum + net(order), 0);
+  const { data: orders, error } = await supabaseAdmin()
+    .from("Order")
+    .select("total, paidAt, isDemo, refunds:Refund(amount, status)")
+    .gte("paidAt", from.toISOString())
+    .lt("paidAt", to.toISOString())
+    .in("paymentStatus", [...paidStatuses]);
+  throwIf(error);
+  const rows = (orders || []) as OrderRow[];
+  const revenue = rows.reduce((sum, order) => sum + net(order), 0);
   const byDay = new Map<string, number>();
-  for (const order of orders) {
+  for (const order of rows) {
     if (!order.paidAt) continue;
-    const key = accraDayKey(order.paidAt);
+    const key = accraDayKey(new Date(order.paidAt));
     byDay.set(key, (byDay.get(key) || 0) + net(order));
   }
   return {
     revenue,
-    orders: orders.length,
-    average: orders.length ? Math.round(revenue / orders.length) : 0,
-    demoOrders: orders.filter((order) => order.isDemo).length,
+    orders: rows.length,
+    average: rows.length ? Math.round(revenue / rows.length) : 0,
+    demoOrders: rows.filter((order) => order.isDemo).length,
     byDay: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)),
   };
 }
@@ -33,19 +45,36 @@ export async function dashboardMetrics() {
   const today = startOfDayInTimeZone(now, "Africa/Accra");
   const month = startOfMonthInTimeZone(now, "Africa/Accra");
   const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
-  const [todaySales, monthSales, counts, customers, lowStock, recent] = await Promise.all([
+  const db = supabaseAdmin();
+  const [todaySales, monthSales, fulfilmentRows, customersCount, lowStockResult, recentResult] = await Promise.all([
     salesReport(today, tomorrow),
     salesReport(month, tomorrow),
-    prisma.order.groupBy({ by: ["fulfilmentStatus"], _count: true }),
-    prisma.user.count({ where: { role: "customer" } }),
-    prisma.product.findMany({ where: { status: "PUBLISHED", deletedAt: null, trackInventory: true }, include: { variants: true }, take: 200 }),
-    prisma.order.findMany({ orderBy: { createdAt: "desc" }, take: 8 }),
+    db.from("Order").select("fulfilmentStatus"),
+    db.from("User").select("id", { count: "exact", head: true }).eq("role", "customer"),
+    db
+      .from("Product")
+      .select("id, name, sku, onHand, reserved, lowStockThreshold, variants:ProductVariant(onHand, reserved)")
+      .eq("status", "PUBLISHED")
+      .is("deletedAt", null)
+      .eq("trackInventory", true)
+      .limit(200),
+    db.from("Order").select("*").order("createdAt", { ascending: false }).limit(8),
   ]);
-  const low = lowStock.filter((product) => {
-    const units = product.variants.length
-      ? product.variants.reduce((sum, variant) => sum + variant.onHand - variant.reserved, 0)
+  throwIf(fulfilmentRows.error);
+  throwIf(customersCount.error);
+  throwIf(lowStockResult.error);
+  throwIf(recentResult.error);
+  const countsMap = new Map<string, number>();
+  for (const row of fulfilmentRows.data || []) {
+    countsMap.set(row.fulfilmentStatus, (countsMap.get(row.fulfilmentStatus) || 0) + 1);
+  }
+  const counts = [...countsMap.entries()].map(([fulfilmentStatus, _count]) => ({ fulfilmentStatus, _count }));
+  const low = (lowStockResult.data || []).filter((product) => {
+    const variants = product.variants || [];
+    const units = variants.length
+      ? variants.reduce((sum, variant) => sum + variant.onHand - variant.reserved, 0)
       : product.onHand - product.reserved;
     return units <= product.lowStockThreshold;
   });
-  return { todaySales, monthSales, counts, customers, low, recent };
+  return { todaySales, monthSales, counts, customers: customersCount.count ?? 0, low, recent: recentResult.data || [] };
 }

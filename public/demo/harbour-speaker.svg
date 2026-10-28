@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000">
   <rect width="800" height="1000" fill="#F4F7F4"/>
-  <rect x="70" y="80" width="660" height="640" fill="#5C675F"/>
+  <rect x="70" y="80" width="660" height="640" fill="#57534E"/>
   <text x="70" y="800" fill="#1A2420" font-family="Georgia, serif" font-size="42">Harbour speaker</text>
   <text x="70" y="850" fill="#5C675F" font-family="Georgia, serif" font-size="22">AuraNova catalogue mark</text>
 </svg>

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
+import { supabaseAdmin } from "@/server/db";
 
 export const dynamic = "force-dynamic";
-import { prisma } from "@/server/db";
 
 export async function GET() {
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    const { error } = await supabaseAdmin().from("StoreSettings").select("id").eq("id", "default").limit(1).maybeSingle();
+    if (error) throw error;
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ ok: false }, { status: 503 });

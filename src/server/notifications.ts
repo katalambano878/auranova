@@ -1,5 +1,5 @@
 import { Resend } from "resend";
-import { prisma } from "./db";
+import { nid, supabaseAdmin, throwIf } from "./db";
 import { getSettings } from "./settings";
 
 function escape(value: string) {
@@ -33,15 +33,15 @@ export async function notify(input: {
       emailNote = "The email provider rejected the message.";
     }
   }
-  await prisma.notification.create({
-    data: {
-      kind: input.kind,
-      title: input.title,
-      body: input.body,
-      emailed,
-      emailNote: input.email ? emailNote : null,
-    },
+  const { error } = await supabaseAdmin().from("Notification").insert({
+    id: nid(),
+    kind: input.kind,
+    title: input.title,
+    body: input.body,
+    emailed,
+    emailNote: input.email ? emailNote : null,
   });
+  throwIf(error);
   return { emailed, emailNote };
 }
 

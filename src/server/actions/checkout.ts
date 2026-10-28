@@ -29,7 +29,7 @@ export async function quoteCheckoutAction(input: unknown) {
 
 export async function deliveryOptionsAction(region: string, city: string) {
   const cart = await cartView();
-  const weight = cart.items.reduce((sum, item) => sum + ((item.variant?.weightGrams ?? item.product.weightGrams ?? 0) * item.quantity), 0);
+  const weight = cart.items.reduce((sum: any, item: any) => sum + ((item.variant?.weightGrams ?? item.product.weightGrams ?? 0) * item.quantity), 0);
   const methods = await shippingChoices(region, city, cart.subtotal, weight);
   return methods.map((method) => ({
     id: method.id,

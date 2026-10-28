@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { createBrowserClient } from "@supabase/ssr";
 import { useSearchParams } from "next/navigation";
-import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/fields";
 import { PageIntro } from "@/components/store/page-intro";
-import { Suspense } from "react";
+
+function browser() {
+  return createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL || "", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "");
+}
 
 function ResetForm() {
   const params = useSearchParams();
@@ -15,9 +18,14 @@ function ResetForm() {
     <form className="space-y-4" onSubmit={async (event) => {
       event.preventDefault();
       const password = String(new FormData(event.currentTarget).get("password") || "");
-      const token = params.get("token") || "";
-      const result = await authClient.resetPassword({ newPassword: password, token });
-      setMessage(result.error ? result.error.message || "Reset failed." : "Password updated. You can sign in.");
+      const client = browser();
+      const code = params.get("code");
+      if (code) {
+        const exchanged = await client.auth.exchangeCodeForSession(code);
+        if (exchanged.error) return setMessage(exchanged.error.message);
+      }
+      const result = await client.auth.updateUser({ password });
+      setMessage(result.error ? result.error.message : "Password updated. You can sign in.");
     }}>
       <Label>New password<Input name="password" type="password" required minLength={8} /></Label>
       <Button type="submit">Update password</Button>

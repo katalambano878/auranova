@@ -1,28 +1,27 @@
-import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@/generated/prisma/client";
+import ws from "ws";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+const globalForSupabase = globalThis as unknown as { supabase?: SupabaseClient };
 
-function createClient() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error("DATABASE_URL is not set");
-  return new PrismaClient({
-    adapter: new PrismaPg({
-      connectionString,
-      ssl: connectionString.includes("supabase") ? { rejectUnauthorized: false } : undefined,
-    }),
+export function nid() {
+  return crypto.randomUUID();
+}
+
+function createAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    realtime: { transport: ws as unknown as typeof WebSocket },
   });
 }
 
-function getClient() {
-  if (!globalForPrisma.prisma) globalForPrisma.prisma = createClient();
-  return globalForPrisma.prisma;
+export function supabaseAdmin() {
+  if (!globalForSupabase.supabase) globalForSupabase.supabase = createAdmin();
+  return globalForSupabase.supabase;
 }
 
-export const prisma = new Proxy({} as PrismaClient, {
-  get(_target, property) {
-    const client = getClient();
-    const value = client[property as keyof PrismaClient];
-    return typeof value === "function" ? value.bind(client) : value;
-  },
-});
+export function throwIf(error: { message: string } | null) {
+  if (error) throw new Error(error.message);
+}

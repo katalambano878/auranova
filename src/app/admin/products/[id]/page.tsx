@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { formatMoney } from "@/lib/money";
 import { addVariant } from "@/server/actions/admin";
 import { attachProductImage } from "@/server/actions/admin-ops";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { AdminForm } from "@/components/admin/form";
 import { ProductEditor } from "@/components/admin/product-editor";
 import { Input, Label } from "@/components/ui/fields";
@@ -12,12 +12,23 @@ export const dynamic = "force-dynamic";
 
 export default async function EditProductPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [product, categories, brands, media] = await Promise.all([
-    prisma.product.findUnique({ where: { id }, include: { variants: true, images: { orderBy: { position: "asc" } } } }),
-    prisma.category.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
-    prisma.brand.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
-    prisma.mediaAsset.findMany({ orderBy: { createdAt: "desc" }, take: 30 }),
+  const db = supabaseAdmin();
+  const [productRes, categoriesRes, brandsRes, mediaRes] = await Promise.all([
+    db.from("Product").select("*, variants:ProductVariant(*), images:ProductImage(*)").eq("id", id).maybeSingle(),
+    db.from("Category").select("*").is("deletedAt", null).order("name"),
+    db.from("Brand").select("*").is("deletedAt", null).order("name"),
+    db.from("MediaAsset").select("*").order("createdAt", { ascending: false }).limit(30),
   ]);
+  throwIf(productRes.error);
+  throwIf(categoriesRes.error);
+  throwIf(brandsRes.error);
+  throwIf(mediaRes.error);
+  const product = productRes.data
+    ? { ...productRes.data, images: [...(productRes.data.images || [])].sort((a, b) => a.position - b.position) }
+    : null;
+  const categories = categoriesRes.data || [];
+  const brands = brandsRes.data || [];
+  const media = mediaRes.data || [];
   if (!product) notFound();
   return (
     <main className="max-w-3xl">
@@ -28,7 +39,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
       <section className="mt-12">
         <h2 className="font-serif text-2xl">Images</h2>
         <ul className="mt-3 grid grid-cols-3 gap-3">
-          {product.images.map((image) => <li key={image.id}><img src={image.url} alt={image.alt} className="aspect-square w-full object-cover" /></li>)}
+          {product.images.map((image: any) => <li key={image.id}><img src={image.url} alt={image.alt} className="aspect-square w-full object-cover" /></li>)}
         </ul>
         <div className="mt-4">
           <AdminForm action={attachProductImage} submit="Attach image">
@@ -45,7 +56,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
       <section className="mt-12">
         <h2 className="font-serif text-2xl">Variants</h2>
         <ul className="mt-3 text-sm">
-          {product.variants.map((variant) => (
+          {product.variants.map((variant: any) => (
             <li key={variant.id} className="border-b border-line py-2">{variant.label} · {variant.sku} · {formatMoney(variant.price)} · {variant.onHand - variant.reserved} available</li>
           ))}
         </ul>

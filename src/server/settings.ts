@@ -1,4 +1,4 @@
-import { prisma } from "./db";
+import { supabaseAdmin, throwIf } from "./db";
 
 const fallback = {
   id: "default",
@@ -46,8 +46,9 @@ const fallback = {
 };
 
 export async function getSettings() {
-  const settings = await prisma.storeSettings.findUnique({ where: { id: "default" } });
-  return settings ?? fallback;
+  const { data, error } = await supabaseAdmin().from("StoreSettings").select("*").eq("id", "default").maybeSingle();
+  throwIf(error);
+  return data ?? fallback;
 }
 
 export type StoreSettingsRecord = Awaited<ReturnType<typeof getSettings>>;

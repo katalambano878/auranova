@@ -64,8 +64,8 @@ export function CheckoutForm({ coupon, addresses }: { coupon: string; addresses:
       setPending(true);
       const result = await placeOrderAction({ ...form, idempotencyKey });
       setPending(false);
-      if (!result.ok) return toast.error("error" in result ? result.error : result.reason);
-      if ("error" in result && result.error) toast.error(result.error);
+      if (!result.ok) return toast.error("error" in result ? String(result.error) : result.reason);
+      if ("error" in result && typeof result.error === "string" && result.error) toast.error(result.error);
       if (result.checkoutUrl) window.location.href = result.checkoutUrl;
       else router.push(`/checkout/confirmation?attempt=${result.attemptReference}`);
     }}>

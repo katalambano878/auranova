@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { formatMoney } from "@/lib/money";
 import { canTransitionFulfilment, fulfilmentStatuses } from "@/lib/order-status";
 import { addOrderNote, manualRefundAction, refundAction, updateFulfilment } from "@/server/actions/admin";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { AdminForm } from "@/components/admin/form";
 import { Input, Label, Textarea } from "@/components/ui/fields";
 
@@ -11,11 +11,15 @@ export const dynamic = "force-dynamic";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const order = await prisma.order.findUnique({
-    where: { id },
-    include: { items: true, attempts: true, refunds: true, events: { orderBy: { createdAt: "asc" } }, notes: { include: { author: true } }, shipment: true },
-  });
+  const { data: order, error } = await supabaseAdmin()
+    .from("Order")
+    .select("*, items:OrderItem(*), attempts:PaymentAttempt(*), refunds:Refund(*), events:OrderEvent(*), notes:OrderNote(*, author:User(*)), shipment:Shipment(*)")
+    .eq("id", id)
+    .maybeSingle();
+  throwIf(error);
   if (!order) notFound();
+  order.events = [...(order.events || [])].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  order.shipment = Array.isArray(order.shipment) ? order.shipment[0] : order.shipment;
   const nextStatuses = fulfilmentStatuses.filter((status) => canTransitionFulfilment(order.fulfilmentStatus, status));
   const address = order.shippingAddress as Record<string, string | null>;
   return (
@@ -33,7 +37,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       <table className="mt-6 w-full text-left text-sm">
         <thead><tr className="border-b border-line"><th className="py-2">Item</th><th>SKU</th><th>Qty</th><th>Unit</th><th>Line</th></tr></thead>
         <tbody>
-          {order.items.map((item) => (
+          {order.items.map((item: any) => (
             <tr key={item.id} className="border-b border-line">
               <td className="py-2">{item.name}{item.variantName ? ` · ${item.variantName}` : ""}</td>
               <td>{item.sku}</td>
@@ -74,7 +78,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             <input type="hidden" name="orderId" value={order.id} />
             <Textarea name="body" required rows={3} />
           </AdminForm>
-          <ul className="mt-3 text-sm">{order.notes.map((note) => <li key={note.id} className="border-b border-line py-2">{note.body}<span className="block text-stone">{note.author?.name || "Staff"}</span></li>)}</ul>
+          <ul className="mt-3 text-sm">{order.notes.map((note: any) => <li key={note.id} className="border-b border-line py-2">{note.body}<span className="block text-stone">{note.author?.name || "Staff"}</span></li>)}</ul>
         </div>
       </section>
       <section className="mt-10">
@@ -86,7 +90,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
           <Label>Reason<Input name="reason" required /></Label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="restock" /> Restock this refund</label>
         </AdminForm>
-        {order.refunds.filter((refund) => refund.status === "PENDING").map((refund) => (
+        {order.refunds.filter((refund: any) => refund.status === "PENDING").map((refund: any) => (
           <div key={refund.id} className="mt-4 border border-line p-3">
             <p className="text-sm">Pending {formatMoney(refund.amount, order.currency)} · {refund.reason}</p>
             <AdminForm action={manualRefundAction} submit="Confirm manual refund">
@@ -99,12 +103,12 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       <section className="mt-10">
         <h2 className="font-serif text-2xl">Payments</h2>
         <ul className="mt-3 text-sm">
-          {order.attempts.map((attempt) => <li key={attempt.id} className="border-b border-line py-2">{attempt.provider} · {attempt.reference} · {attempt.status.toLowerCase()} · {formatMoney(attempt.amount, attempt.currency)}</li>)}
+          {order.attempts.map((attempt: any) => <li key={attempt.id} className="border-b border-line py-2">{attempt.provider} · {attempt.reference} · {attempt.status.toLowerCase()} · {formatMoney(attempt.amount, attempt.currency)}</li>)}
         </ul>
       </section>
       <section className="mt-10">
         <h2 className="font-serif text-2xl">History</h2>
-        <ul className="mt-3 text-sm">{order.events.map((event) => <li key={event.id} className="border-b border-line py-2">{event.kind} {event.fromStatus || ""} → {event.toStatus || ""} {event.note || ""}</li>)}</ul>
+        <ul className="mt-3 text-sm">{order.events.map((event: any) => <li key={event.id} className="border-b border-line py-2">{event.kind} {event.fromStatus || ""} → {event.toStatus || ""} {event.note || ""}</li>)}</ul>
       </section>
     </main>
   );

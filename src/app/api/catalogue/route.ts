@@ -1,15 +1,24 @@
 import { NextResponse } from "next/server";
+import { supabaseAdmin, throwIf } from "@/server/db";
 
 export const dynamic = "force-dynamic";
-import { prisma } from "@/server/db";
 
 export async function GET(request: Request) {
   const ids = (new URL(request.url).searchParams.get("ids") || "").split(",").filter(Boolean).slice(0, 40);
-  const products = await prisma.product.findMany({
-    where: { id: { in: ids }, status: "PUBLISHED", deletedAt: null },
-    select: { id: true, name: true, slug: true, images: { take: 1, select: { url: true } } },
-  });
+  if (!ids.length) return NextResponse.json({ products: [] });
+  const { data: products, error } = await supabaseAdmin()
+    .from("Product")
+    .select("id, name, slug, images:ProductImage(url)")
+    .in("id", ids)
+    .eq("status", "PUBLISHED")
+    .is("deletedAt", null);
+  throwIf(error);
   return NextResponse.json({
-    products: products.map((product) => ({ id: product.id, name: product.name, slug: product.slug, image: product.images[0]?.url })),
+    products: (products || []).map((product) => ({
+      id: product.id,
+      name: product.name,
+      slug: product.slug,
+      image: product.images?.[0]?.url,
+    })),
   });
 }

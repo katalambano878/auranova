@@ -1,15 +1,19 @@
 import { saveFaq, savePage } from "@/server/actions/admin";
-import { prisma } from "@/server/db";
+import { supabaseAdmin, throwIf } from "@/server/db";
 import { AdminForm } from "@/components/admin/form";
 import { Input, Label, Textarea } from "@/components/ui/fields";
 
 export const dynamic = "force-dynamic";
 
 export default async function PagesAdmin() {
-  const [pages, faqs] = await Promise.all([
-    prisma.contentPage.findMany({ orderBy: { slug: "asc" } }),
-    prisma.faqItem.findMany({ orderBy: { position: "asc" } }),
+  const [pagesRes, faqsRes] = await Promise.all([
+    supabaseAdmin().from("ContentPage").select("*").order("slug"),
+    supabaseAdmin().from("FaqItem").select("*").order("position"),
   ]);
+  throwIf(pagesRes.error);
+  throwIf(faqsRes.error);
+  const pages = pagesRes.data || [];
+  const faqs = faqsRes.data || [];
   return (
     <main className="max-w-3xl">
       <h1 className="font-serif text-4xl">Pages</h1>
