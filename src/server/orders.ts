@@ -80,6 +80,12 @@ export async function transitionFulfilment(input: {
         subject: `Order ${order.number}`,
         text: `Your order ${order.number} is now ${input.to.toLowerCase().replaceAll("_", " ")}.${input.trackingRef ? `\nTracking: ${input.trackingRef}` : ""}`,
       },
+      sms: order.phone
+        ? {
+            to: order.phone,
+            text: `AuraNova order ${order.number} is now ${input.to.toLowerCase().replaceAll("_", " ")}.${input.trackingRef ? ` Tracking: ${input.trackingRef}` : ""}`,
+          }
+        : undefined,
     });
   }
   return { ok: true as const };
@@ -184,6 +190,9 @@ export async function requestRefund(input: {
     title: `Refund ${formatMoney(input.amount, order.currency)} for ${order.number}`,
     body: input.reason,
     email: { to: order.email, subject: `Refund update for ${order.number}`, text: `Refund status: ${status.toLowerCase()}.\nAmount: ${formatMoney(input.amount, order.currency)}.` },
+    sms: order.phone
+      ? { to: order.phone, text: `AuraNova refund for ${order.number}: ${status.toLowerCase()}. Amount ${formatMoney(input.amount, order.currency)}.` }
+      : undefined,
   });
   return { ok: true as const, status };
 }

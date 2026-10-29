@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { nid, supabaseAdmin, throwIf } from "./db";
 import { getSettings } from "./settings";
+import { sendSms } from "./sms";
 
 function escape(value: string) {
   return value
@@ -14,6 +15,7 @@ export async function notify(input: {
   title: string;
   body: string;
   email?: { to: string; subject: string; text: string };
+  sms?: { to: string; text: string };
 }) {
   const settings = await getSettings();
   let emailed = false;
@@ -33,6 +35,7 @@ export async function notify(input: {
       emailNote = "The email provider rejected the message.";
     }
   }
+  const sms = input.sms ? await sendSms(input.sms) : null;
   const { error } = await supabaseAdmin().from("Notification").insert({
     id: nid(),
     kind: input.kind,
@@ -40,9 +43,11 @@ export async function notify(input: {
     body: input.body,
     emailed,
     emailNote: input.email ? emailNote : null,
+    smsSent: sms?.sent ?? false,
+    smsNote: sms?.note ?? null,
   });
   throwIf(error);
-  return { emailed, emailNote };
+  return { emailed, emailNote, smsSent: sms?.sent ?? false, smsNote: sms?.note ?? null };
 }
 
 export async function sendPasswordReset(email: string, url: string) {
@@ -60,10 +65,12 @@ export async function sendPasswordReset(email: string, url: string) {
 
 export async function sendOrderNotice(input: {
   email: string;
+  phone?: string | null;
   orderNumber: string;
   totalLabel: string;
   paymentStatus: string;
 }) {
+  const text = `Your AuraNova order ${input.orderNumber} is recorded.\nPayment status: ${input.paymentStatus}.\nTotal: ${input.totalLabel}.\n\nWe only mark an online payment as paid after the provider confirms it.`;
   await notify({
     kind: "order",
     title: `Order ${input.orderNumber}`,
@@ -71,7 +78,8 @@ export async function sendOrderNotice(input: {
     email: {
       to: input.email,
       subject: `Order ${input.orderNumber}`,
-      text: `Your AuraNova order ${input.orderNumber} is recorded.\nPayment status: ${input.paymentStatus}.\nTotal: ${input.totalLabel}.\n\nWe only mark an online payment as paid after the provider confirms it.`,
+      text,
     },
+    sms: input.phone ? { to: input.phone, text: `AuraNova order ${input.orderNumber}: ${input.paymentStatus}. Total ${input.totalLabel}.` } : undefined,
   });
 }

@@ -632,6 +632,8 @@ model Notification {
   body      String
   emailed   Boolean   @default(false)
   emailNote String?
+  smsSent   Boolean   @default(false)
+  smsNote   String?
   readAt    DateTime?
   createdAt DateTime  @default(now())
 

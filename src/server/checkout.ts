@@ -358,6 +358,7 @@ export async function placeOrder(raw: unknown) {
   if (!online) {
     await sendOrderNotice({
       email: parsed.data.email,
+      phone: parsed.data.phone,
       orderNumber: orderNo,
       totalLabel: formatMoney(quote.total, quote.currency),
       paymentStatus: "unpaid — pay on delivery",

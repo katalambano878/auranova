@@ -148,6 +148,7 @@ export async function markPaid(attemptId: string) {
     if (fresh) {
       await sendOrderNotice({
         email: fresh.email,
+        phone: fresh.phone,
         orderNumber: fresh.number,
         totalLabel: formatMoney(fresh.total, fresh.currency),
         paymentStatus: "paid",
